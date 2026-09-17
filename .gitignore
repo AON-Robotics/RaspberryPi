@@ -67,3 +67,11 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Additional build directories
+out/
+cmake-build-*/
+
+# Editor / OS noise
+*~
+.DS_Store
