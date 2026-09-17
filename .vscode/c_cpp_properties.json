@@ -3,25 +3,13 @@
         {
             "name": "Linux",
             "includePath": [
-                "${workspaceFolder}/**",
-                "/home/aonpi/Override_Vex/**",
-                "/usr/include/opencv4/**",
-                "/home/aonpi/depthai-core/include/**",
-                "/home/aonpi/depthai-core/shared/depthai-shared/include/**",
-                "/home/aonpi/depthai-core/shared/depthai-bootloader-shared/include/**",
-                "/home/aonpi/depthai-core/shared/depthai-shared/3rdparty/**",
-                "/home/aonpi/.hunter/_Base/16cc954/2bb9ff3/a188e8e/Install/include/**"
-            ],
-            "defines": [
-                "DEPTHAI_TARGET_CORE",
-                "DEPTHAI_TARGET_OPENCV",
-                "JSON_USE_IMPLICIT_CONVERSIONS=1"
+                "${workspaceFolder}/include/**"
             ],
             "compilerPath": "/usr/bin/g++",
             "cStandard": "c17",
             "cppStandard": "c++17",
-            "intelliSenseMode": "linux-gcc-x64",
-            "compileCommands": "/home/aonpi/Override_Vex/build/compile_commands.json"
+            "intelliSenseMode": "linux-gcc-arm64",
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json"
         }
     ],
     "version": 4

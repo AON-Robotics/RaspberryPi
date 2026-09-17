@@ -1,36 +1,61 @@
-#include "otos.hpp"
+// Live read-out from the SparkFun Qwiic OTOS over I2C.
+//
+//   Usage: otos_monitor [i2c-bus]           (default /dev/i2c-1)
+//
+// Calibrates the IMU, resets tracking, then prints pose at 50 Hz. Use it to
+// sanity-check wiring and to measure the scalars in tuneOtos() below.
+
+#include "vexpi/otos.hpp"
+#include "vexpi/units.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstdio>
+#include <thread>
 
 namespace
 {
-constexpr float kMeterToInch = 39.37f;
-constexpr float kRadToDeg = 180.0f / float(M_PI);
 
 std::atomic<bool> g_running{true};
 
 void onSignal(int) { g_running = false; }
+
+// Everything here is robot-specific. Measure on YOUR robot and edit.
+void tuneOtos(vexpi::Otos &otos)
+{
+    // Where the sensor sits relative to robot centre, in inches and degrees.
+    vexpi::Otos::Pose offset;
+    offset.x = vexpi::units::inchesToMeters(0.0f);
+    offset.y = vexpi::units::inchesToMeters(0.0f);
+    offset.h = vexpi::units::degreesToRadians(0.0f);
+    otos.setOffset(offset);
+
+    // Drift correction; 1.0 means none. Push a measured distance / spin a
+    // measured number of turns, then set these to actual / reported.
+    otos.setLinearScalar(1.0f);
+    otos.setAngularScalar(1.0f);
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
-    const char *bus = (argc > 1) ? argv[1] : "/dev/i2c-1";
+    const char *bus = (argc > 1) ? argv[1] : vexpi::Otos::kDefaultBus;
 
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
 
     try
     {
-        Otos otos(bus);
+        vexpi::Otos otos(bus);
 
         if (!otos.connected())
         {
             std::fprintf(stderr,
                          "OTOS not found at 0x%02X on %s.\n"
                          "Check the Qwiic cable, then run: i2cdetect -y 1\n",
-                         Otos::kAddress, bus);
+                         vexpi::Otos::kAddress, bus);
             return 1;
         }
 
@@ -40,17 +65,7 @@ int main(int argc, char **argv)
 
         std::printf("Self test... %s\n", otos.selfTest() ? "PASS" : "FAIL");
 
-        // Mounting offset of the sensor relative to robot center.
-        // Measure on your actual robot and fill these in (inches / degrees).
-        Otos::Pose offset;
-        offset.x = 0.0f / kMeterToInch;
-        offset.y = 0.0f / kMeterToInch;
-        offset.h = 0.0f / kRadToDeg;
-        otos.setOffset(offset);
-
-        // Tune these after measuring drift; 1.0 means no correction.
-        otos.setLinearScalar(1.0f);
-        otos.setAngularScalar(1.0f);
+        tuneOtos(otos);
 
         std::printf("Calibrating IMU - keep the robot PERFECTLY STILL...\n");
         std::printf("Calibration %s\n", otos.calibrateImu() ? "done" : "FAILED");
@@ -60,11 +75,12 @@ int main(int argc, char **argv)
 
         while (g_running)
         {
-            const Otos::Pose p = otos.position();
-            const Otos::Status s = otos.status();
+            const vexpi::Otos::Pose p = otos.position();
+            const vexpi::Otos::Status s = otos.status();
 
             std::printf("\rX %8.2f in   Y %8.2f in   H %8.2f deg  %s%s%s%s   ",
-                        p.x * kMeterToInch, p.y * kMeterToInch, p.h * kRadToDeg,
+                        vexpi::units::metersToInches(p.x), vexpi::units::metersToInches(p.y),
+                        vexpi::units::radiansToDegrees(p.h),
                         s.tiltWarning ? "[TILT] " : "",
                         s.opticalWarning ? "[OPTICAL] " : "",
                         s.opticalFatal ? "[PAA FAULT] " : "",
