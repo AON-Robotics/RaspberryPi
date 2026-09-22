@@ -2,7 +2,7 @@
 // live preview window. No colour detection -- this is the simple depth demo
 // to fall back on when you want to check the camera itself.
 //
-//   Usage: depth_center_demo [serial-device]    (default /dev/ttyACM0)
+//   Usage: depth_center_demo [serial-device]    (default /dev/ttyACM1 user port)
 //
 // Packets use the untagged "<centimetres>,<offset>\n" format.
 

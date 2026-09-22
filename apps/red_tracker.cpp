@@ -1,7 +1,7 @@
 // Streams the distance to the nearest red target from an OAK-D Lite to the
 // VEX V5 brain over USB serial.
 //
-//   Usage: red_tracker [serial-device]      (default /dev/ttyACM0)
+//   Usage: red_tracker [serial-device]      (default /dev/ttyACM1 user port)
 //
 // Packets are "R,<inches>\n" while tracking and "N,0\n" when the target is
 // lost; see docs/serial-protocol.md.

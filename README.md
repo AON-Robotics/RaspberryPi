@@ -55,14 +55,22 @@ cmake -S . -B build -DVEXPI_BUILD_VISION=OFF
 ## Running
 
 ```bash
-./build/red_tracker                  # default /dev/ttyACM0
-./build/red_tracker /dev/ttyACM1     # or name the port
+./build/red_tracker                  # default /dev/ttyACM1 (V5 User Port)
+./build/red_tracker /dev/ttyACM2     # or name the detected V5 User Port
 
 ./build/otos_monitor                 # default /dev/i2c-1
 ```
 
 Neither program needs the brain attached — if the serial port cannot be
 opened they warn once and carry on, which is how you tune at a desk.
+
+A directly connected V5 Brain normally exposes two serial devices. Use the
+one whose interface is `VEX Robotics User Port`, commonly `/dev/ttyACM1`;
+`/dev/ttyACM0` is commonly the communications/programming port and can open
+successfully without delivering packets to user-program `stdin`. On the Pi,
+`udevadm info -q property -n /dev/ttyACM1` normally reports the user port as
+`ID_USB_INTERFACE_NUM=02`; the communications port is normally `00`. Pass the
+matching device to `red_tracker` if its name differs.
 
 Your user needs to be in the `dialout` group for the serial port and `i2c` for
 the OTOS:
