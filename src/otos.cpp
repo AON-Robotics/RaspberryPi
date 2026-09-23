@@ -112,6 +112,13 @@ Otos::Status Otos::status()
 }
 
 Otos::Pose Otos::position() { return readPose(kRegPosXL, kInt16ToMeter, kInt16ToRad); }
+
+bool Otos::readPosition(Pose &out)
+{
+    bool ok = false;
+    out = readPose(kRegPosXL, kInt16ToMeter, kInt16ToRad, &ok);
+    return ok;
+}
 Otos::Pose Otos::velocity() { return readPose(kRegVelXL, kInt16ToMps, kInt16ToRps); }
 
 uint8_t Otos::encodeScalar(float scalar)
@@ -132,12 +139,16 @@ void Otos::packPose(uint8_t *raw, const Pose &p)
     raw[5] = (h >> 8) & 0xFF;
 }
 
-Otos::Pose Otos::readPose(uint8_t reg, float xyScale, float hScale)
+Otos::Pose Otos::readPose(uint8_t reg, float xyScale, float hScale, bool *ok)
 {
     uint8_t raw[6] = {0};
     Pose p;
     if (!readRegs(reg, raw, 6))
+    {
+        if (ok) *ok = false;
         return p;
+    }
+    if (ok) *ok = true;
     p.x = static_cast<int16_t>((raw[1] << 8) | raw[0]) * xyScale;
     p.y = static_cast<int16_t>((raw[3] << 8) | raw[2]) * xyScale;
     p.h = static_cast<int16_t>((raw[5] << 8) | raw[4]) * hScale;

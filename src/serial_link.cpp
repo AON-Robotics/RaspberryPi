@@ -95,11 +95,19 @@ bool SerialLink::write(const std::string &payload)
     if (fd_ < 0)
         return false;
 
-    const ssize_t written = ::write(fd_, payload.c_str(), payload.size());
-    if (written < 0)
+    size_t sent = 0;
+    while (sent < payload.size())
     {
-        lastError_ = std::string("serial write failed: ") + std::strerror(errno);
-        return false;
+        const ssize_t written = ::write(fd_, payload.data() + sent, payload.size() - sent);
+        if (written < 0 && errno == EINTR)
+            continue;
+        if (written <= 0)
+        {
+            lastError_ = std::string("serial write failed: ") +
+                         (written < 0 ? std::strerror(errno) : "zero-byte write");
+            return false;
+        }
+        sent += static_cast<size_t>(written);
     }
     return true;
 }

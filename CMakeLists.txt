@@ -63,6 +63,9 @@ endif()
 add_executable(otos_monitor apps/otos_monitor.cpp)
 target_link_libraries(otos_monitor PRIVATE vexpi_core)
 
+add_executable(otos_stream apps/otos_stream.cpp)
+target_link_libraries(otos_stream PRIVATE vexpi_core)
+
 if(VEXPI_BUILD_VISION)
     add_executable(red_tracker apps/red_tracker.cpp)
     target_link_libraries(red_tracker PRIVATE vexpi_vision)

@@ -87,6 +87,7 @@ class Otos
 
     Status status();
     Pose position();
+    bool readPosition(Pose &out); // false on I2C read failure
     Pose velocity();
 
   private:
@@ -94,7 +95,7 @@ class Otos
     static void packPose(uint8_t *raw, const Pose &p);
     static void sleepMs(int ms);
 
-    Pose readPose(uint8_t reg, float xyScale, float hScale);
+    Pose readPose(uint8_t reg, float xyScale, float hScale, bool *ok = nullptr);
 
     // Repeated-start combined transaction; the OTOS auto-increments registers.
     bool readRegs(uint8_t reg, uint8_t *buf, size_t len);

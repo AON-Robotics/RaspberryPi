@@ -13,6 +13,7 @@ the brain stays simple and just reads numbers.
 | --- | --- |
 | `red_tracker` | Finds the nearest red target with the OAK-D Lite and streams its distance to the brain. The main program. |
 | `otos_monitor` | Live pose read-out from the OTOS. Use it to check wiring and to measure the drift scalars. |
+| `otos_stream` | Calibrates the OTOS at startup, then sends pose to Override at 50 Hz. |
 | `depth_center_demo` | Distance to whatever is at the centre of the frame, with a preview window. The fallback for checking the camera itself. |
 
 ## Layout
@@ -59,6 +60,7 @@ cmake -S . -B build -DVEXPI_BUILD_VISION=OFF
 ./build/red_tracker /dev/ttyACM2     # or name the detected V5 User Port
 
 ./build/otos_monitor                 # default /dev/i2c-1
+./build/otos_stream                  # default /dev/ttyACM1 and /dev/i2c-1
 ```
 
 Neither program needs the brain attached — if the serial port cannot be
@@ -108,3 +110,7 @@ Extended disparity and the on-device median filter are mutually exclusive, so
 the filter is switched off whenever extended disparity is on. The tracker makes
 up for it on the host: the reported distance is a median over the masked pixels
 and then a rolling median over the last five frames.
+
+`otos_stream` sends `O,<x inches>,<y inches>,<heading degrees>\n` to Override.
+Keep the robot stationary during startup calibration. Run this program before
+autonomous; it requires exclusive access to the V5 User Port.
