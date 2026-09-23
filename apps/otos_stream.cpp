@@ -51,6 +51,8 @@ int main(int argc, char** argv) {
                 if (!link.open(port)) {
                     std::fprintf(stderr, "%s\n", link.lastError().c_str());
                     nextOpen = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+                } else {
+                    std::fprintf(stderr, "V5 User Port connected on %s\n", port);
                 }
             }
             if (!otos.connected()) {
@@ -78,10 +80,16 @@ int main(int argc, char** argv) {
                 char packet[96];
                 const int size = std::snprintf(packet, sizeof(packet),
                                                "O,%.3f,%.3f,%.3f\n", x, y, heading);
-                if (size > 0 && size < static_cast<int>(sizeof(packet)) &&
-                    !link.write(packet)) {
-                    std::fprintf(stderr, "%s\n", link.lastError().c_str());
-                    link.close();
+                if (size > 0 && size < static_cast<int>(sizeof(packet))) {
+                    if (link.write(packet)) {
+                        // Show the exact newline-delimited payload written to the V5 serial port.
+                        std::fputs("SENT ", stdout);
+                        std::fputs(packet, stdout);
+                        std::fflush(stdout);
+                    } else {
+                        std::fprintf(stderr, "%s\n", link.lastError().c_str());
+                        link.close();
+                    }
                 }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(20));

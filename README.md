@@ -114,3 +114,7 @@ and then a rolling median over the last five frames.
 `otos_stream` sends `O,<x inches>,<y inches>,<heading degrees>\n` to Override.
 Keep the robot stationary during startup calibration. Run this program before
 autonomous; it requires exclusive access to the V5 User Port.
+
+While `otos_stream` runs, its terminal prints each successful serial packet as
+`SENT O,x,y,heading` (inches, inches, degrees). At 50 Hz this scrolls quickly;
+redirect stdout to a log if you want to inspect every packet afterward.
