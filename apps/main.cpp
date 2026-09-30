@@ -55,26 +55,37 @@ int main(int argc, char **argv)
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
 
-    try
+    // Make redirected stdout useful immediately in the systemd journal.
+    std::setvbuf(stdout, nullptr, _IOLBF, 0);
+    std::fprintf(stderr, "Starting VEX coprocessor: serial=%s, I2C=%s\n", port, bus);
+    vexpi::PacketSender packets(port);
+    vexpi::OtosConfig otosConfig = vexpi::robot::otosConfig();
+    otosConfig.debugPackets = debugPackets;
+    while (!stopRequested)
     {
-        vexpi::PacketSender packets(port); // Share this with future sensor workers.
-        vexpi::OtosConfig otosConfig = vexpi::robot::otosConfig();
-        otosConfig.debugPackets = debugPackets;
-        vexpi::OtosStream otos(bus, packets, otosConfig);
-        if (!otos.calibrate())
-            return 1;
-        if (!otos.start())
-            return 1;
-
-        while (!stopRequested && !otos.failed())
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        otos.stop();
-        return otos.failed() ? 1 : 0;
+        try
+        {
+            // Reopen the bus on every attempt, including when it appeared late.
+            vexpi::OtosStream otos(bus, packets, otosConfig);
+            if (otos.calibrate() && !stopRequested && otos.start())
+            {
+                std::fprintf(stderr, "OTOS stream started\n");
+                while (!stopRequested && !otos.failed())
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                otos.stop();
+            }
+        }
+        catch (const std::exception &e)
+        {
+            std::fprintf(stderr, "OTOS startup/worker error: %s\n", e.what());
+        }
+        if (!stopRequested)
+        {
+            std::fprintf(stderr, "Retrying OTOS initialization in 2 seconds\n");
+            for (int i = 0; i < 20 && !stopRequested; ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
-    catch (const std::exception &e)
-    {
-        std::fprintf(stderr, "Startup error: %s\n", e.what());
-        return 1;
-    }
+    std::fprintf(stderr, "VEX coprocessor stopped\n");
+    return 0;
 }

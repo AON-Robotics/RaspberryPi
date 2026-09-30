@@ -1,0 +1,20 @@
+[Unit]
+Description=VEX Raspberry Pi Coprocessor
+# Retry indefinitely, paced by RestartSec, even during prolonged hardware faults.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=aonpi
+WorkingDirectory=/home/aonpi/RaspberryPi5VEX
+ExecStart=/home/aonpi/RaspberryPi5VEX/build/vexpi
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vexp
+
+[Install]
+WantedBy=multi-user.target
