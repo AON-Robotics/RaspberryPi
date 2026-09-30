@@ -12,3 +12,13 @@ compile_commands.json
 
 # Local logs
 *.log
+
+# vcpkg
+vcpkg_installed/
+
+# Debug information files
+*.dwo
+
+# Test output and cache
+Testing/
+.cache/

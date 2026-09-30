@@ -193,3 +193,6 @@ process.
 
 The packet test runs through `ctest`; OTOS, USB, and camera behavior still need
 to be checked on the actual Pi and robot after hardware or configuration changes.
+
+The packet formats and receiver guidance are in
+[docs/serial-protocol.md](docs/serial-protocol.md).
