@@ -1,6 +1,8 @@
 #pragma once
 
-#include <cmath>
+#include "vexpi/units.hpp"
+
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -35,9 +37,9 @@ class Otos
 
     // int16 fixed-point scales: +/-10 m, +/-pi rad, +/-5 m/s, +/-2000 deg/s
     static constexpr float kInt16ToMeter = 10.0f / 32768.0f;
-    static constexpr float kInt16ToRad = float(M_PI) / 32768.0f;
+    static constexpr float kInt16ToRad = units::kPi / 32768.0f;
     static constexpr float kInt16ToMps = 5.0f / 32768.0f;
-    static constexpr float kInt16ToRps = (2000.0f * float(M_PI) / 180.0f) / 32768.0f;
+    static constexpr float kInt16ToRps = (2000.0f * units::kPi / 180.0f) / 32768.0f;
 
     static constexpr float kMinScalar = 0.872f;
     static constexpr float kMaxScalar = 1.127f;
@@ -85,7 +87,7 @@ class Otos
     // Sensor mounting position relative to robot center, in meters/radians.
     bool setOffset(const Pose &p);
 
-    Status status();
+    bool readStatus(Status &out); // false on I2C read failure
     Pose position();
     bool readPosition(Pose &out); // false on I2C read failure
     Pose velocity();

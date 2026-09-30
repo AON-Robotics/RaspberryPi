@@ -1,11 +1,13 @@
-#include "vexpi/otos.hpp"
+#include "vexpi/otos/otos.hpp"
 
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <fcntl.h>
 #include <linux/i2c-dev.h>
 #include <linux/i2c.h>
+#include <limits>
 #include <stdexcept>
 #include <sys/ioctl.h>
 #include <thread>
@@ -45,7 +47,8 @@ void Otos::version(uint8_t &hwMajor, uint8_t &hwMinor, uint8_t &fwMajor, uint8_t
 
 bool Otos::selfTest()
 {
-    writeReg(kRegSelfTest, 0x01);
+    if (!writeReg(kRegSelfTest, 0x01))
+        return false;
     for (int i = 0; i < 10; i++)
     {
         sleepMs(5);
@@ -80,35 +83,45 @@ bool Otos::resetTracking() { return writeReg(kRegReset, 0x01); }
 
 bool Otos::setLinearScalar(float scalar)
 {
-    if (scalar < kMinScalar || scalar > kMaxScalar)
+    if (!std::isfinite(scalar) || scalar < kMinScalar || scalar > kMaxScalar)
         return false;
     return writeReg(kRegScalarLinear, encodeScalar(scalar));
 }
 
 bool Otos::setAngularScalar(float scalar)
 {
-    if (scalar < kMinScalar || scalar > kMaxScalar)
+    if (!std::isfinite(scalar) || scalar < kMinScalar || scalar > kMaxScalar)
         return false;
     return writeReg(kRegScalarAngular, encodeScalar(scalar));
 }
 
 bool Otos::setOffset(const Pose &p)
 {
+    const auto representable = [](float value, float scale)
+    {
+        const float raw = value / scale;
+        return std::isfinite(raw) && raw >= std::numeric_limits<int16_t>::min() &&
+               raw <= std::numeric_limits<int16_t>::max();
+    };
+    if (!representable(p.x, kInt16ToMeter) || !representable(p.y, kInt16ToMeter) ||
+        !representable(p.h, kInt16ToRad))
+        return false;
+
     uint8_t raw[6];
     packPose(raw, p);
     return writeRegs(kRegOffXL, raw, 6);
 }
 
-Otos::Status Otos::status()
+bool Otos::readStatus(Status &out)
 {
     uint8_t v = 0;
-    readRegs(kRegStatus, &v, 1);
-    Status s;
-    s.tiltWarning = v & 0x01;
-    s.opticalWarning = v & 0x02;
-    s.opticalFatal = v & 0x40;
-    s.imuFatal = v & 0x80;
-    return s;
+    if (!readRegs(kRegStatus, &v, 1))
+        return false;
+    out.tiltWarning = v & 0x01;
+    out.opticalWarning = v & 0x02;
+    out.opticalFatal = v & 0x40;
+    out.imuFatal = v & 0x80;
+    return true;
 }
 
 Otos::Pose Otos::position() { return readPose(kRegPosXL, kInt16ToMeter, kInt16ToRad); }
@@ -123,7 +136,7 @@ Otos::Pose Otos::velocity() { return readPose(kRegVelXL, kInt16ToMps, kInt16ToRp
 
 uint8_t Otos::encodeScalar(float scalar)
 {
-    return static_cast<uint8_t>(static_cast<int8_t>((scalar - 1.0f) * 1000.0f + 0.5f));
+    return static_cast<uint8_t>(static_cast<int8_t>(std::lround((scalar - 1.0f) * 1000.0f)));
 }
 
 void Otos::packPose(uint8_t *raw, const Pose &p)

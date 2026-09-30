@@ -1,10 +1,11 @@
-#include "vexpi/serial_link.hpp"
+#include "vexpi/serial/serial_link.hpp"
 
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
+#include <utility>
 
 namespace vexpi
 {
