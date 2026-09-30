@@ -1,199 +1,102 @@
-# Raspberry Pi VEX coprocessor
+# RaspberryPi
 
-Raspberry Pi 5 sensor software for AON Robotics. The main `vexpi` program reads
-a SparkFun Qwiic Optical Tracking Odometry Sensor (OTOS) over I²C and sends
-pose packets to a VEX V5 Brain over its USB User Port. OAK-D Lite camera
-programs are available as separate, optional tools.
+Raspberry Pi 5 coprocessor software for AON Robotics.
 
-The main program currently runs **OTOS only**. The camera programs do not run
-inside `vexpi` and should not use the same V5 User Port at the same time.
+The Pi does the work the V5 brain cannot: stereo depth from an OAK-D Lite and
+optical odometry from a SparkFun Qwiic OTOS. It reduces both to small ASCII
+packets and streams them to the brain over USB serial, so the auton routine on
+the brain stays simple and just reads numbers.
 
-## Requirements
+## What is in here
 
-- Raspberry Pi running Linux, with I²C enabled and a Qwiic OTOS connected
-- VEX V5 Brain connected by USB if packets need to reach a robot program
-- CMake 3.20 or newer and a C++17 compiler
-- `i2c-tools` for the optional `i2cdetect` wiring check
+| Program | Does |
+| --- | --- |
+| `red_tracker` | Finds the nearest red target with the OAK-D Lite and streams its distance to the brain. The main program. |
+| `otos_monitor` | Live pose read-out from the OTOS. Use it to check wiring and to measure the drift scalars. |
+| `depth_center_demo` | Distance to whatever is at the centre of the frame, with a preview window. The fallback for checking the camera itself. |
 
-On Raspberry Pi OS or Debian, install the build tools with:
+## Layout
 
-```bash
-sudo apt update
-sudo apt install cmake g++ i2c-tools
+```
+include/vexpi/     Public headers
+  serial_link.hpp      RAII USB serial link to the V5 brain
+  vex_packet.hpp       Wire format builders
+  units.hpp            metres/radians <-> inches/degrees
+  otos.hpp             SparkFun Qwiic OTOS driver (I2C)
+  oak_camera.hpp       OAK-D Lite pipeline, synchronised RGB + depth
+  red_target_tracker.hpp   Red blob detection, depth sampling, filtering
+src/               Implementations of the above
+apps/              One main() per program, each a thin wrapper
+docs/              Serial protocol, including the brain-side parser
 ```
 
-The default build has no OpenCV or DepthAI dependency. Camera requirements are
-listed under [Optional camera programs](#optional-camera-programs).
+Two libraries get built. `vexpi_core` is the serial link, packet format and
+OTOS driver — it depends on nothing but pthreads. `vexpi_vision` adds the
+camera and tracking, and pulls in OpenCV and DepthAI. `otos_monitor` links only
+the former, so odometry work does not need the camera SDK present.
 
-## Build and run
+## Building
 
-From the repository directory:
+Needs CMake 3.20+, a C++17 compiler, OpenCV 4, and
+[depthai-core](https://github.com/luxonis/depthai-core) v2 installed where
+CMake can find it.
+
+```bash
+cmake -S . -B build
+cmake --build build -j4
+```
+
+Binaries land in `build/`. To build without the camera SDK:
 
 ```bash
 cmake -S . -B build -DVEXPI_BUILD_VISION=OFF
-cmake --build build --parallel 2
-ctest --test-dir build --output-on-failure
-./build/vexpi
 ```
 
-After the first configure, repeat `cmake --build build --parallel 2` to rebuild.
-On the AON Pi, the repository directory is `/home/aonpi/RaspberryPi5VEX`, so
-the usual rebuild is:
+## Running
 
 ```bash
-cd /home/aonpi/RaspberryPi5VEX
-cmake --build build --parallel 2
+./build/red_tracker                  # default /dev/ttyACM0
+./build/red_tracker /dev/ttyACM1     # or name the port
+
+./build/otos_monitor                 # default /dev/i2c-1
 ```
 
-The program calibrates the IMU at startup. **Keep the robot flat and still
-during calibration.** Press Ctrl-C to stop. `vexpi` exits if OTOS fails its
-startup checks. If the V5 is unplugged, it keeps reading OTOS and retries the
-serial connection once a second.
+Neither program needs the brain attached — if the serial port cannot be
+opened they warn once and carry on, which is how you tune at a desk.
 
-### Device access
-
-The default devices are `/dev/i2c-1` for OTOS and `/dev/ttyACM1` for the V5
-User Port. Enable I²C in the Pi's system configuration. The user running
-`vexpi` needs access to both devices; on Raspberry Pi OS this usually means
-membership in the `i2c` and `dialout` groups:
+Your user needs to be in the `dialout` group for the serial port and `i2c` for
+the OTOS:
 
 ```bash
-sudo usermod -aG i2c,dialout "$USER"
+sudo usermod -aG dialout,i2c $USER   # log out and back in
+i2cdetect -y 1                       # OTOS should answer at 0x17
 ```
 
-Log out and back in for the group change to take effect. Check for the OTOS
-at I²C address `0x17` with `i2cdetect -y 1`.
+## Tuning
 
-A V5 Brain can expose both a communications port and a User Port. The User
-Port is commonly `/dev/ttyACM1`, but check the USB interface if packets are
-not reaching the brain:
+**Red thresholds** live in `RedTrackerConfig` in
+[red_target_tracker.hpp](include/vexpi/red_target_tracker.hpp). Red straddles
+the wrap-around point of the HSV hue circle, so it takes two bands. Field
+lighting moves these — if the mask picks up the floor, raise the saturation
+and value minimums before touching hue.
 
-```bash
-udevadm info -q property -n /dev/ttyACM1
-```
+**Depth range** is clamped to 150–1820 mm. The lower bound is what extended
+disparity makes reachable on an OAK-D Lite; below it the stereo pair has no
+overlap and the readings are fiction.
 
-Look for the `VEX Robotics User Port` interface. Pass device paths when your
-setup uses different ones:
+**OTOS offsets and scalars** are robot-specific and live in `tuneOtos()` in
+[apps/otos_monitor.cpp](apps/otos_monitor.cpp). Measure them on your robot:
+push a known distance and set the linear scalar to actual/reported, spin a
+known number of turns for the angular one.
 
-```bash
-./build/vexpi /dev/ttyACM2 /dev/i2c-1
-```
+## Notes on the camera
 
-### Debug output
+The RGB preview and the aligned depth output must be the same size and share
+the RGB sensor's 16:9 aspect ratio, since it runs at 1080p. Use 640x360, not
+640x480 — at 4:3 the two images do not line up pixel for pixel and the depth
+sampled inside a colour mask belongs to something else.
 
-Normal operation logs connections, errors, and OTOS health changes without
-printing every packet. Use `--debug` to inspect the pose values:
-
-```bash
-./build/vexpi --debug
-./build/vexpi --debug /dev/ttyACM1 /dev/i2c-1
-```
-
-`SENT O,x,y,heading` means a serial write succeeded. `UNSENT O,x,y,heading`
-means OTOS supplied a reading but the write did not complete. The values are
-inches, inches, and degrees. Debug mode prints about 50 lines per second; turn
-it off for normal service operation. Run `./build/vexpi --help` for the CLI
-syntax.
-
-### Start automatically on boot
-
-After manual startup works, create `/etc/systemd/system/vexpi.service` with
-the following content. Replace `pi` and `/home/pi/RaspberryPi` with the user
-and absolute checkout path on your machine. For the AON Pi, use `aonpi` and
-`/home/aonpi/RaspberryPi5VEX`.
-
-```ini
-[Unit]
-Description=VEX Pi OTOS packet stream
-
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=/home/pi/RaspberryPi
-ExecStart=/home/pi/RaspberryPi/build/vexpi
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now vexpi.service
-sudo systemctl status vexpi.service
-journalctl -u vexpi.service -f
-```
-
-The service user needs the same I²C and serial device access as a manual run.
-Keep the robot still when the Pi boots because every service start calibrates
-the IMU. To debug the service, temporarily append `--debug` to `ExecStart`,
-run `sudo systemctl daemon-reload` and `sudo systemctl restart vexpi.service`,
-then watch `journalctl -u vexpi.service -f`.
-
-## OTOS configuration and packet format
-
-Robot-specific mounting offsets and drift scalars live in
-[apps/robot_config.hpp](apps/robot_config.hpp). The starting values are zero
-offset and 1.0 scalars. Measure them on the installed robot, edit that file,
-and rebuild. Use `--debug` to compare reported movement with measured movement.
-SparkFun's [calibration example](https://github.com/sparkfun/SparkFun_Qwiic_OTOS_Arduino_Library/blob/main/examples/Example3_Calibration/Example3_Calibration.ino)
-explains the scalar measurement process.
-
-The main program sends one newline-terminated packet per usable OTOS reading:
-
-```text
-O,<x inches>,<y inches>,<heading degrees>\n
-```
-
-It converts OTOS coordinates to the AON Override convention: X forward,
-Y right, heading clockwise. For example, `O,12.000,3.000,-90.000` reports
-12 inches forward, 3 inches right, and a heading of -90 degrees. OTOS warnings,
-faults, or I²C read errors stop pose packets until readings recover. The
-receiving robot program must treat old packets as stale; AON Override currently
-uses a 300 ms timeout.
-
-## Optional camera programs
-
-Install OpenCV 4 and [DepthAI Core v2 with OpenCV support](https://github.com/luxonis/depthai-core/tree/v2_stable),
-then enable the vision targets:
-
-```bash
-cmake -S . -B build -DVEXPI_BUILD_VISION=ON
-cmake --build build --parallel 2
-```
-
-| Program | Use | Output |
-| --- | --- | --- |
-| `red_tracker` | Tracks a red target with the OAK-D Lite. | `R,<distance inches>\n` or `N,0\n` |
-| `depth_center_demo` | Shows a camera preview and samples center depth; requires a graphical desktop. | Legacy `<distance cm>,<offset>\n` |
-
-Run them from the repository directory with `./build/red_tracker` or
-`./build/depth_center_demo`. Each accepts an optional V5 User Port path as its
-first argument.
-
-These are separate diagnostics. AON Override currently parses only `O` pose
-packets; it ignores their camera packets. Run one serial-writing program at a
-time. The camera programs have not been integrated into the `vexpi` startup
-process.
-
-## Source layout
-
-| Path | Purpose |
-| --- | --- |
-| `apps/main.cpp` | Starts and stops the OTOS worker. |
-| `apps/robot_config.hpp` | Robot-specific OTOS tuning. |
-| `apps/vision/` | Optional camera programs. |
-| `include/vexpi/otos/`, `src/otos/` | OTOS driver and streaming worker. |
-| `include/vexpi/serial/`, `src/serial/` | V5 serial link and shared packet sender. |
-| `include/vexpi/protocol/`, `src/protocol/` | Packet format and coordinate conversion. |
-| `include/vexpi/vision/`, `src/vision/` | OAK-D Lite camera and red target tracking. |
-| `include/vexpi/units.hpp` | Shared unit conversion helpers. |
-| `tests/protocol/` | Hardware-independent packet and coordinate tests. |
-
-The packet test runs through `ctest`; OTOS, USB, and camera behavior still need
-to be checked on the actual Pi and robot after hardware or configuration changes.
-
-## License
-
-No license file has been added to this repository yet.
+Extended disparity and the on-device median filter are mutually exclusive, so
+the filter is switched off whenever extended disparity is on. The tracker makes
+up for it on the host: the reported distance is a median over the masked pixels
+and then a rolling median over the last five frames.

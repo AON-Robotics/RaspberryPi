@@ -12,3 +12,20 @@ compile_commands.json
 
 # Local logs
 *.log
+# vcpkg
+vcpkg_installed/
+
+# debug information files
+*.dwo
+
+# test output & cache
+Testing/
+.cache/
+
+# Additional build directories
+out/
+cmake-build-*/
+
+# Editor / OS noise
+*~
+.DS_Store
