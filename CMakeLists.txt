@@ -18,18 +18,20 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 # The vision half needs DepthAI and OpenCV; the odometry half needs neither.
-# Turn this off to build on a machine without the camera SDK installed.
-option(VEXPI_BUILD_VISION "Build the OAK-D Lite vision library and apps" ON)
+# Turn this on when building the optional camera programs.
+option(VEXPI_BUILD_VISION "Build the OAK-D Lite vision library and apps" OFF)
 
 # ---------------------------------------------------------------------------
-# vexpi_core -- no camera dependencies: serial link, packet format, OTOS
+# vexpi_core -- no camera dependencies: serial output, packet format, OTOS
 # ---------------------------------------------------------------------------
 find_package(Threads REQUIRED)
 
 add_library(vexpi_core
-    src/serial_link.cpp
-    src/vex_packet.cpp
-    src/otos.cpp)
+    src/serial/serial_link.cpp
+    src/serial/packet_sender.cpp
+    src/protocol/vex_packet.cpp
+    src/otos/otos.cpp
+    src/otos/otos_stream.cpp)
 
 target_include_directories(vexpi_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
@@ -44,8 +46,8 @@ if(VEXPI_BUILD_VISION)
     find_package(depthai CONFIG REQUIRED)
 
     add_library(vexpi_vision
-        src/oak_camera.cpp
-        src/red_target_tracker.cpp)
+        src/vision/oak_camera.cpp
+        src/vision/red_target_tracker.cpp)
 
     target_include_directories(vexpi_vision PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -60,13 +62,25 @@ endif()
 # ---------------------------------------------------------------------------
 # Applications
 # ---------------------------------------------------------------------------
-add_executable(otos_monitor apps/otos_monitor.cpp)
-target_link_libraries(otos_monitor PRIVATE vexpi_core)
+add_executable(vexpi apps/main.cpp)
+target_link_libraries(vexpi PRIVATE vexpi_core)
 
 if(VEXPI_BUILD_VISION)
-    add_executable(red_tracker apps/red_tracker.cpp)
+    add_executable(red_tracker apps/vision/red_tracker.cpp)
     target_link_libraries(red_tracker PRIVATE vexpi_vision)
 
-    add_executable(depth_center_demo apps/depth_center_demo.cpp)
+    add_executable(depth_center_demo apps/vision/depth_center_demo.cpp)
     target_link_libraries(depth_center_demo PRIVATE vexpi_vision)
+endif()
+
+# The protocol test runs without a sensor or camera.
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(vexpi_packet_test tests/protocol/packet_test.cpp src/protocol/vex_packet.cpp)
+    target_include_directories(vexpi_packet_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME packet_format COMMAND vexpi_packet_test)
+    add_executable(vexpi_serial_test tests/serial/recovery_test.cpp)
+    target_link_libraries(vexpi_serial_test PRIVATE vexpi_core)
+    add_test(NAME serial_recovery COMMAND vexpi_serial_test)
+    set_tests_properties(serial_recovery PROPERTIES TIMEOUT 10)
 endif()

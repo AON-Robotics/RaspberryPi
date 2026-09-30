@@ -1,72 +1,31 @@
 # Pi to V5 serial protocol
 
-The Pi is the only talker. It writes newline-terminated ASCII lines to the V5
-brain's USB port, which appears on the Pi as `/dev/ttyACM0`. The brain never
-replies.
+The Pi writes newline-terminated ASCII packets to the V5 Brain's USB User Port.
+The default device is `/dev/ttyACM1`; confirm the interface on your Pi as
+described in the [README](../README.md#device-access). The serial link is
+configured as raw 115200 8N1.
 
-The link is configured 115200 8N1, raw (no canonical mode, no flow control, no
-output post-processing). Because the V5 brain enumerates as a USB CDC-ACM
-device the baud rate is nominal and ignored by the hardware, but it is set
-anyway so the port behaves predictably.
+Only one program should write to the User Port at a time. The main `vexpi`
+program sends OTOS pose packets. The optional vision programs use the same
+packet builders but run separately.
 
 ## Packets
 
-### Red target tracking — `red_tracker`
+| Sender | Packet | Meaning |
+| --- | --- | --- |
+| `vexpi` | `O,<x>,<y>,<heading>\n` | OTOS pose: inches forward, inches right, degrees clockwise. Values have three decimal places. |
+| `red_tracker` | `R,<inches>\n` | A red target is being tracked at the given integer distance. |
+| `red_tracker` | `N,0\n` | No usable target this frame. |
+| `depth_center_demo` | `<centimetres>,<offset>\n` | Legacy untagged center distance. The offset is currently zero. |
 
-| Packet | Meaning |
-| --- | --- |
-| `R,<inches>\n` | A red target is being tracked, `<inches>` away. |
-| `N,0\n` | No usable target this frame. |
+For example, `O,12.000,3.000,-90.000` means 12 inches forward, 3 inches
+right, and a heading of -90 degrees. OTOS warnings, faults, and I²C read
+errors suppress pose packets until readings recover.
 
-`<inches>` is an integer, rounded from the filtered millimetre distance. One
-packet goes out per camera frame (15 FPS by default), including while the
-tracker is in its `HOLD` state — during a one or two frame dropout the last
-good distance keeps being sent rather than dropping to `N,0`.
+## Receiver behavior
 
-### Centre distance — `depth_center_demo`
-
-| Packet | Meaning |
-| --- | --- |
-| `<centimetres>,<offset>\n` | Distance at the frame centre. `<offset>` is always `0`. |
-
-This is the original untagged format. It has no "no target" value: an
-unreadable centre patch sends `0,0`.
-
-## Reading it on the brain
-
-Parse it as lines, not as fixed-size reads — a USB write can be split across
-packets. Roughly, in PROS:
-
-```cpp
-// Accumulate bytes until a newline, then parse one complete line.
-static std::string line;
-
-while (true) {
-    int c = fgetc(stdin);           // or your serial read of choice
-    if (c == EOF) break;
-
-    if (c != '\n') {
-        line.push_back(static_cast<char>(c));
-        continue;
-    }
-
-    char tag = line.empty() ? 'N' : line[0];
-    int value = 0;
-    if (std::sscanf(line.c_str(), "%*[^,],%d", &value) == 1) {
-        if (tag == 'R') {
-            targetDistanceInches = value;
-            targetVisible = true;
-        } else {
-            targetVisible = false;
-        }
-    }
-    line.clear();
-}
-```
-
-## Timing
-
-Treat the stream as advisory, not synchronous. If packets stop arriving — the
-Pi rebooted, the cable came loose — the brain should time out and fall back to
-its own sensors rather than acting on a stale distance. A few hundred
-milliseconds without a packet is a reasonable threshold at 15 FPS.
+Accumulate bytes until a newline, then parse one complete line. A serial read
+may contain part of a line or multiple lines. Check the leading tag and the
+expected number of fields before using the values. Treat an old pose as stale
+when no fresh `O` packet arrives; AON Override currently uses a 300 ms timeout.
+The optional camera packets are ignored by that receiver.

@@ -2,15 +2,17 @@
 // live preview window. No colour detection -- this is the simple depth demo
 // to fall back on when you want to check the camera itself.
 //
-//   Usage: depth_center_demo [serial-device]    (default /dev/ttyACM0)
+//   Usage: depth_center_demo [serial-device]    (default /dev/ttyACM1 user port)
 //
 // Packets use the untagged "<centimetres>,<offset>\n" format.
 
-#include "vexpi/oak_camera.hpp"
-#include "vexpi/serial_link.hpp"
-#include "vexpi/vex_packet.hpp"
+#include "vexpi/vision/oak_camera.hpp"
+#include "vexpi/serial/packet_sender.hpp"
+#include "vexpi/serial/serial_link.hpp"
+#include "vexpi/protocol/vex_packet.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -53,11 +55,7 @@ int main(int argc, char **argv)
 {
     const std::string serialPort = (argc > 1) ? argv[1] : vexpi::SerialLink::kDefaultDevice;
 
-    vexpi::SerialLink vex;
-    if (!vex.open(serialPort))
-        std::cerr << "Warning: " << vex.lastError() << "\n";
-    else
-        std::cout << "VEX brain connected on " << serialPort << "\n";
+    vexpi::PacketSender packets(serialPort);
 
     try
     {
@@ -75,8 +73,7 @@ int main(int argc, char **argv)
             const int distanceCm = centerDistanceCm(depth);
 
             const std::string payload = vexpi::packet::distanceOffset(distanceCm, 0);
-            if (vex.isOpen() && !vex.write(payload))
-                std::cerr << vex.lastError() << "\n";
+            packets.send(payload);
 
             const cv::Point center(frame.cols / 2, frame.rows / 2);
             cv::circle(frame, center, 5, cv::Scalar(0, 255, 0), -1);
