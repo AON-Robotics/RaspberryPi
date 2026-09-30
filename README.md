@@ -193,7 +193,3 @@ process.
 
 The packet test runs through `ctest`; OTOS, USB, and camera behavior still need
 to be checked on the actual Pi and robot after hardware or configuration changes.
-
-## License
-
-No license file has been added to this repository yet.
