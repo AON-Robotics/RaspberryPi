@@ -51,7 +51,7 @@
   .tools { align-self: flex-start; max-width: min(720px, 90%); display: flex; flex-direction: column; gap: 4px; }
   details { background: var(--tool); border-radius: 8px; padding: 6px 10px; font-size: 14px; }
   summary { cursor: pointer; font-family: ui-monospace, Menlo, Consolas, monospace; }
-  summary .bad { color: var(--err); }
+  summary .bad, .meta.bad { color: var(--err); }
   pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
   .thinking { align-self: flex-start; color: var(--muted); font-style: italic; }
 
@@ -78,6 +78,7 @@
   <header>
     <h1>Robot Chat</h1>
     <span class="meta" id="meta">Debugging only. Esc sends STOP.</span>
+    <span class="meta" id="hops" title="Health of every link hop, refreshed every 3 s">checking link…</span>
     <a id="backup-stop" href="#" target="_blank" rel="noopener">Backup STOP page</a>
     <button class="link" id="new-chat" type="button">New chat</button>
   </header>
@@ -191,6 +192,26 @@
     document.getElementById("meta").textContent = `Model: ${c.model} · Debugging only. Esc sends STOP.`;
     document.getElementById("backup-stop").href = c.stop_page;
   }).catch(() => {});
+
+  // One word per hop (LLM, Pi server, serial, brain); a broken hop shows why on hover.
+  async function refreshHops() {
+    const el = document.getElementById("hops");
+    try {
+      const h = await (await fetch("/api/health")).json();
+      const r = h.robot || {};
+      const hops = [["LLM", h.llm], ["Pi", r.hop === "server" ? r : r.server],
+                    ["serial", r.serial], ["brain", r.brain]];
+      el.textContent = hops.map(([n, s]) => `${n} ${s && s.ok ? "✓" : "✗"}`).join("  ");
+      el.title = hops.filter(([, s]) => !(s && s.ok))
+                     .map(([n, s]) => `${n}: ${(s && (s.message || s.error)) || "unknown"}`).join("\n") || "all hops ok";
+      el.className = hops.every(([, s]) => s && s.ok) ? "meta" : "meta bad";
+    } catch (e) {
+      el.textContent = "chat app unreachable";
+      el.className = "meta bad";
+    }
+  }
+  refreshHops();
+  setInterval(refreshHops, 3000);
 
   input.focus();
 </script>

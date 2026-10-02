@@ -27,8 +27,14 @@ include/vexpi/     Public headers
   red_target_tracker.hpp   Red blob detection, depth sampling, filtering
 src/               Implementations of the above
 apps/              One main() per program, each a thin wrapper
-docs/              Serial protocol, including the brain-side parser
+docs/              Serial protocol (both directions)
+bridge/            LLM debugging bridge: robot tool server (runs on the Pi),
+                   agent loop and web chat (run on a laptop)
+sim/               Laptop-only brain simulator and end-to-end tests
 ```
+
+The bridge talks to the brain code in the Override repo
+(`src/aon/pi/`); see [bridge/README.md](bridge/README.md).
 
 Two libraries get built. `vexpi_core` is the serial link, packet format and
 OTOS driver — it depends on nothing but pthreads. `vexpi_vision` adds the
@@ -55,8 +61,8 @@ cmake -S . -B build -DVEXPI_BUILD_VISION=OFF
 ## Running
 
 ```bash
-./build/red_tracker                  # default /dev/ttyACM0
-./build/red_tracker /dev/ttyACM1     # or name the port
+./build/red_tracker                  # default /dev/ttyACM1, the brain's user port
+./build/red_tracker /dev/ttyACM0     # or name the port (e.g. through a controller)
 
 ./build/otos_monitor                 # default /dev/i2c-1
 ```

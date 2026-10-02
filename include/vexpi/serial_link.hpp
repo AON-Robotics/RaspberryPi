@@ -7,14 +7,17 @@ namespace vexpi
 
 // RAII wrapper around the USB serial link to the VEX V5 brain.
 //
-// The brain enumerates as a CDC-ACM device (typically /dev/ttyACM0), so the
-// baud rate is nominal -- the port is still configured to 115200 8N1 with all
+// A brain plugged in directly enumerates as two CDC-ACM devices: the system
+// port used to upload programs (usually /dev/ttyACM0) and the user port the
+// program's stdin/stdout use (usually /dev/ttyACM1). Packets must go to the
+// user port. Through a controller there is only one port; pass it explicitly.
+// The baud rate is nominal -- the port is still configured to 115200 8N1 with all
 // line processing disabled, because a raw byte stream is what the V5 program
 // expects to read.
 class SerialLink
 {
   public:
-    static constexpr const char *kDefaultDevice = "/dev/ttyACM0";
+    static constexpr const char *kDefaultDevice = "/dev/ttyACM1";
 
     SerialLink() = default;
     ~SerialLink();

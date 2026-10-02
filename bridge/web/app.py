@@ -67,6 +67,12 @@ def index() -> FileResponse:
     return FileResponse(HERE / "index.html")
 
 
+@app.get("/api/health")
+def health() -> dict:
+    """Every hop, for the status line on the page: LLM, server, serial, brain."""
+    return {"llm": loop.check_llm(), "robot": loop.check_health()}
+
+
 @app.get("/api/config")
 def config() -> dict:
     """Non-secret settings the page displays."""
@@ -83,15 +89,13 @@ def chat(req: ChatRequest) -> dict:
         try:
             tools = loop.get_tools()
         except requests.RequestException as e:
-            raise HTTPException(502, f"Robot server unreachable: {e}")
+            raise HTTPException(502, f"Stopped: the robot server on the Pi failed. Cannot reach {loop.BRIDGE_URL} ({e})")
 
         tool_calls = []
         messages.append({"role": "user", "content": req.message})
-        try:
-            reply = loop.run_turn(messages, tools, on_tool=lambda name, args, result:
-                                  tool_calls.append({"name": name, "args": args, "result": result}))
-        except requests.RequestException as e:
-            raise HTTPException(502, f"Ollama unreachable or failed: {e}")
+        # run_turn never raises for a broken hop; the reply says what failed.
+        reply = loop.run_turn(messages, tools, on_tool=lambda name, args, result:
+                              tool_calls.append({"name": name, "args": args, "result": result}))
         return {"reply": reply, "tool_calls": tool_calls}
     finally:
         lock.release()

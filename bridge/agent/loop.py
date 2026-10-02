@@ -49,6 +49,53 @@ MODEL = os.environ.get("MODEL", "qwen3:8b")
 # many rounds for a single request, we give up and hand control back.
 MAX_TOOL_ROUNDS = 8
 
+# A tool can drive a whole test pattern; the server enforces its own, tighter
+# per-command timeouts, this is only the outer bound.
+TOOL_HTTP_TIMEOUT_S = 120
+
+# What each "hop" in a failure means, for the messages the user reads.
+HOPS = {
+    "llm": "the LLM (Ollama)",
+    "server": "the robot server on the Pi",
+    "serial": "the USB serial link between the Pi and the brain",
+    "brain": "the robot program on the brain",
+}
+
+
+def abort_message(result: dict) -> str:
+    hop = result.get("hop", "server")
+    return f"Stopped: {HOPS.get(hop, hop)} failed. {result.get('message') or result.get('error')}"
+
+
+def check_health() -> dict:
+    """Asks the robot server how every hop is doing (GET /health).
+
+    Returns the server's report, or a failure dict with hop="server" when the
+    server itself cannot be reached.
+    """
+    try:
+        r = requests.get(f"{BRIDGE_URL}/health", timeout=3)
+        r.raise_for_status()
+        return r.json()
+    except requests.RequestException as e:
+        return {"ok": False, "hop": "server", "error": "server_unreachable",
+                "message": f"cannot reach the robot server at {BRIDGE_URL} ({e}). Is the Pi on and the server running?"}
+
+
+def check_llm() -> dict:
+    """Is Ollama up and does it have the model?"""
+    try:
+        r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=3)
+        r.raise_for_status()
+        names = {m.get("name") for m in r.json().get("models", [])}
+        if MODEL not in names and f"{MODEL}:latest" not in names:
+            return {"ok": False, "hop": "llm", "error": "model_missing",
+                    "message": f"Ollama is up but has no model {MODEL!r}; run: ollama pull {MODEL}"}
+        return {"ok": True}
+    except requests.RequestException as e:
+        return {"ok": False, "hop": "llm", "error": "llm_unreachable",
+                "message": f"cannot reach Ollama at {OLLAMA_URL} ({e})"}
+
 # Header sent with every request to the robot server. This is the token
 # check: the server rejects anything without it (HTTP 401).
 AUTH = {"Authorization": f"Bearer {BRIDGE_TOKEN}"}
@@ -56,21 +103,25 @@ AUTH = {"Authorization": f"Bearer {BRIDGE_TOKEN}"}
 # The "system" message is standing instructions the model sees before any
 # user message. It sets the model's role and habits.
 SYSTEM_PROMPT = """\
-You help debug a VEX robot. Use the tools to move it or read its state.
+You help debug a VEX robot. Use the tools to move it, test it, or read its state.
 
 Rules:
-- One motion per tool call. drive() only moves straight; turn() only rotates.
-  For "drive 10 inches then turn left", call drive, wait for its result,
+- One motion per tool call. move() only drives straight; turn() only rotates.
+  For "drive 10 inches then turn left", call move, wait for its result,
   then call turn.
+- turn() degrees are CLOCKWISE positive: "turn right 90" is degrees=90,
+  "turn left 90" is degrees=-90.
 - Only pass the arguments a tool lists. Never invent arguments.
-- If a tool returns an error, read it, fix the arguments, and call again.
-  Do not ask the user to rephrase because of a tool error.
-- The server enforces speed and distance limits. If a result says
-  "clamped": true, tell the user what was actually done.
+- If a tool returns an error with "hop": "server" and "error": "bad_args",
+  fix the arguments and call again. For any other error, do not retry the
+  same motion: tell the user the "message" in plain words.
+- If a result says "clamped": true, tell the user what was actually done.
 - Never compute or guess the robot's position or heading yourself. When the
   user asks where the robot is, call status() and report what it returns.
-- Keep moves small, check status() when unsure, and report what the tools
-  actually returned, including early stops.
+- To check the drivetrain or odometry, use diagnose() (active=true to also
+  test motor and sensor directions) and odometry_test(). Report the
+  "verdict" and every item in "problems", including the suggested fix.
+- Report what the tools actually returned, including early stops.
 """
 
 
@@ -100,11 +151,26 @@ def call_tool(name: str, args: dict) -> dict:
     "server unreachable" and tell the user, rather than everything dying.
     """
     try:
-        r = requests.post(f"{BRIDGE_URL}/tools/{name}", json=args, headers=AUTH, timeout=15)
-        r.raise_for_status()  # turn HTTP errors (401, 404, 500...) into exceptions
+        r = requests.post(f"{BRIDGE_URL}/tools/{name}", json=args, headers=AUTH, timeout=TOOL_HTTP_TIMEOUT_S)
+        if r.status_code == 401:
+            return {"ok": False, "fatal": True, "hop": "server", "error": "bad_token",
+                    "message": "the robot server rejected the token; BRIDGE_TOKEN differs between laptop and Pi"}
+        r.raise_for_status()  # turn other HTTP errors (404, 500...) into exceptions
         return r.json()
+    except requests.Timeout:
+        # The server stopped answering mid-tool: try to stop the robot. If the
+        # server is really gone, the brain stops on its own within 1 s.
+        if name != "stop":
+            try:
+                requests.post(f"{BRIDGE_URL}/tools/stop", json={}, headers=AUTH, timeout=3)
+            except requests.RequestException:
+                pass
+        return {"ok": False, "fatal": True, "hop": "server", "error": "timeout",
+                "message": f"the robot server did not answer {name}() within {TOOL_HTTP_TIMEOUT_S} s; sent stop"}
     except requests.RequestException as e:
-        return {"ok": False, "error": f"server unreachable or refused: {e}"}
+        return {"ok": False, "fatal": True, "hop": "server", "error": "server_unreachable",
+                "message": f"cannot reach the robot server at {BRIDGE_URL} ({e}). The brain stops any Pi "
+                           "motion on its own within 1 s of losing the Pi."}
 
 
 def chat(messages: list, tools: list) -> dict:
@@ -143,10 +209,19 @@ def run_turn(messages: list, tools: list, on_tool=None) -> str:
     `on_tool(name, args, result)` is called after each tool runs, so the
     terminal can print it and the web app can show it on the page.
 
-    Returns the model's final text answer.
+    Returns the model's final text answer. Never raises for a broken hop:
+    if the server, serial link, brain or LLM fails, the turn stops and the
+    answer says which hop failed and why.
     """
+    health = check_health()
+    if health.get("hop") == "server":
+        return finish(messages, abort_message(health))
+
     for _ in range(MAX_TOOL_ROUNDS):
-        reply = chat(messages, tools)
+        try:
+            reply = chat(messages, tools)
+        except requests.RequestException as e:
+            return finish(messages, abort_message({"hop": "llm", "message": f"Ollama at {OLLAMA_URL} failed: {e}"}))
         messages.append(reply)  # remember what the model said
 
         calls = reply.get("tool_calls") or []
@@ -155,7 +230,7 @@ def run_turn(messages: list, tools: list, on_tool=None) -> str:
             return (reply.get("content") or "").strip()
 
         # The model may ask for several tools at once; run them in order.
-        for call in calls:
+        for i, call in enumerate(calls):
             name = call["function"]["name"]
             args = call["function"].get("arguments") or {}
             result = call_tool(name, args)
@@ -166,5 +241,18 @@ def run_turn(messages: list, tools: list, on_tool=None) -> str:
             # converted to a JSON string.
             messages.append({"role": "tool", "tool_name": name,
                              "content": json.dumps(result)})
+            if result.get("fatal"):
+                # The link itself broke: do not let the model carry on with
+                # the remaining calls or retry. Skip the rest and say why.
+                for skipped in calls[i + 1:]:
+                    messages.append({"role": "tool", "tool_name": skipped["function"]["name"],
+                                     "content": json.dumps({"ok": False, "skipped": True})})
+                return finish(messages, abort_message(result))
 
     return "(gave up after too many tool calls)"
+
+
+def finish(messages: list, text: str) -> str:
+    """Ends a turn without the LLM, keeping the history consistent."""
+    messages.append({"role": "assistant", "content": text})
+    return text

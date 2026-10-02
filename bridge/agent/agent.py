@@ -16,9 +16,29 @@ def print_tool(name: str, args: dict, result: dict) -> None:
     print(f"  [{name}({args}) -> {result}]")
 
 
+def print_health() -> bool:
+    """One line per hop, so a broken link is obvious before typing anything."""
+    llm = loop.check_llm()
+    print(f"  llm     {'ok ' if llm['ok'] else 'FAIL'} {loop.MODEL} @ {loop.OLLAMA_URL} {llm.get('message', '')}")
+    health = loop.check_health()
+    if health.get("hop") == "server":
+        print(f"  server  FAIL {health['message']}")
+        return False
+    print(f"  server  ok   {loop.BRIDGE_URL}")
+    serial, brain = health["serial"], health["brain"]
+    print(f"  serial  {'ok ' if serial['ok'] else 'FAIL'} {serial.get('port') or serial.get('error')}")
+    print(f"  brain   {'ok ' if brain['ok'] else 'FAIL'} "
+          f"{('robot=%s mode=%s rtt=%sms' % (brain.get('robot'), brain.get('mode'), brain.get('rtt_ms'))) if brain['ok'] else brain.get('error')}")
+    return llm["ok"]
+
+
 def main() -> None:
+    print("Link check:")
+    if not print_health():
+        print("Fix the failing hop above, then start again.")
+        return
     tools = loop.get_tools()
-    print(f"Connected to {loop.BRIDGE_URL}; tools: {', '.join(t['function']['name'] for t in tools)}")
+    print(f"Tools: {', '.join(t['function']['name'] for t in tools)}")
     print("Type a request, or 'quit'. Ctrl+C sends stop() to the robot.\n")
 
     # The conversation history. Every message (yours, the model's, and each
