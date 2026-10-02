@@ -75,3 +75,7 @@ cmake-build-*/
 # Editor / OS noise
 *~
 .DS_Store
+
+# Python
+.venv/
+__pycache__/
