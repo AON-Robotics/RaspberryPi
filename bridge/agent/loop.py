@@ -22,7 +22,7 @@ Settings (environment variables)
 --------------------------------
     BRIDGE_URL    robot server, e.g. http://mac-name:8000 (Tailscale name)
     BRIDGE_TOKEN  same secret token the server was started with
-    OLLAMA_URL    where Ollama runs; default http://localhost:11434
+    OLLAMA_URL    where Ollama runs; default http://127.0.0.1:11434
     MODEL         which Ollama model to use; default qwen3:8b
 """
 
@@ -41,7 +41,9 @@ import requests  # small library for making HTTP requests
 BRIDGE_URL = os.environ.get("BRIDGE_URL", "http://localhost:8000").rstrip("/")
 # No default for the token on purpose: if it's missing, quit with a message.
 BRIDGE_TOKEN = os.environ.get("BRIDGE_TOKEN") or sys.exit("BRIDGE_TOKEN is not set")
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+# 127.0.0.1, not "localhost": on Windows "localhost" tries IPv6 first and
+# waits ~2 s per request before falling back, since Ollama listens on IPv4.
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 # qwen3:8b tested far more reliable at tool calling than hermes3 (which kept
 # inventing arguments). Any Ollama model with tool support works here.
 MODEL = os.environ.get("MODEL", "qwen3:8b")
