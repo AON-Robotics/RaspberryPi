@@ -1,0 +1,22 @@
+# Runs the web chat app on the gaming laptop:  docker compose up -d
+# Ollama is NOT in here: it runs natively so it can use the GPU.
+# Settings come from bridge/.env (copy .env.example and fill it in).
+services:
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      # host.docker.internal = "the computer this container runs on",
+      # i.e. the laptop's native Ollama.
+      OLLAMA_URL: http://host.docker.internal:11434
+      BRIDGE_URL: ${BRIDGE_URL}
+      BRIDGE_TOKEN: ${BRIDGE_TOKEN}
+      MODEL: ${MODEL:-qwen3:8b}
+    extra_hosts:
+      # Docker Desktop defines host.docker.internal already; this makes it
+      # work on plain Linux Docker too (e.g. a future homelab).
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

@@ -79,3 +79,4 @@ cmake-build-*/
 # Python
 .venv/
 __pycache__/
+.env
