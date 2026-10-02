@@ -16,7 +16,23 @@ def print_tool(name: str, args: dict, result: dict) -> None:
     print(f"  [{name}({args}) -> {result}]")
 
 
+def preflight() -> bool:
+    """Print the health of every hop; True if all are fine."""
+    print("Checking the pipeline:")
+    results = loop.check_pipeline()
+    for r in results:
+        mark = "ok  " if r["ok"] else "FAIL"
+        ms = f" ({r['ms']} ms)" if r["ms"] is not None else ""
+        print(f"  [{mark}] {r['name']:<7}{r['detail']}{ms}")
+        if r["fix"]:
+            print(f"         fix: {r['fix']}")
+    print()
+    return all(r["ok"] for r in results)
+
+
 def main() -> None:
+    if not preflight():
+        raise SystemExit("Not starting: fix the failed step above and run again.")
     tools = loop.get_tools()
     print(f"Connected to {loop.BRIDGE_URL}; tools: {', '.join(t['function']['name'] for t in tools)}")
     print("Type a request, or 'quit'. Ctrl+C sends stop() to the robot.\n")

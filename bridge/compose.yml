@@ -1,4 +1,4 @@
-# Runs the web chat app on the gaming laptop:  docker compose up -d
+# Runs the web chat app on the gaming laptop:  docker compose up -d --build
 # Ollama is NOT in here: it runs natively so it can use the GPU.
 # Settings come from bridge/.env (copy .env.example and fill it in).
 services:
@@ -7,16 +7,31 @@ services:
       context: .
       dockerfile: web/Dockerfile
     ports:
-      - "8080:8080"
+      # Published on ONE address only. BIND_IP = this laptop's Tailscale IP
+      # (`tailscale ip -4`), so teammates reach it over Tailscale and the
+      # Wi-Fi can't. Default 127.0.0.1 = this laptop only.
+      - "${BIND_IP:-127.0.0.1}:8080:8080"
     environment:
       # host.docker.internal = "the computer this container runs on",
       # i.e. the laptop's native Ollama.
       OLLAMA_URL: http://host.docker.internal:11434
-      BRIDGE_URL: ${BRIDGE_URL}
-      BRIDGE_TOKEN: ${BRIDGE_TOKEN}
+      BRIDGE_URL: ${BRIDGE_URL:?set BRIDGE_URL in .env}
+      BRIDGE_TOKEN: ${BRIDGE_TOKEN:?set BRIDGE_TOKEN in .env}
+      TEAM_PASSWORD: ${TEAM_PASSWORD:?set TEAM_PASSWORD in .env}
       MODEL: ${MODEL:-qwen3:8b}
     extra_hosts:
       # Docker Desktop defines host.docker.internal already; this makes it
       # work on plain Linux Docker too (e.g. a future homelab).
       - "host.docker.internal:host-gateway"
+    # Hardening: the app needs no privileges and writes no files.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
     restart: unless-stopped

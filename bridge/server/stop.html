@@ -6,36 +6,18 @@
   Ollama, or the agent loop are down. Open it on a phone and keep it handy.
 
   The token is typed once and remembered by this browser (localStorage), so
-  the page itself contains no secret.
+  the page itself contains no secret. Use the STOP_TOKEN here if the server
+  has one: it can only stop the robot, never drive it.
+
+  Script and styles live in static/ because the server's Content-Security-
+  Policy blocks inline code (see SECURITY_HEADERS in server.py).
 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Robot STOP</title>
-<style>
-  :root { --bg: #f4f4f4; --fg: #111; --muted: #666; --stop: #d0021b; --stop-press: #8f0012;
-          --ok: #1b7f3b; --err: #b00020; --field: #fff; --border: #ccc; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #121212; --fg: #eee; --muted: #999; --field: #1e1e1e; --border: #444; }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; align-items: center;
-         justify-content: center; gap: 24px; padding: 16px; background: var(--bg); color: var(--fg);
-         font-family: system-ui, -apple-system, sans-serif; }
-  #stop { width: min(80vw, 320px); aspect-ratio: 1; border-radius: 50%; border: none;
-          background: var(--stop); color: #fff; font-size: clamp(40px, 12vw, 72px); font-weight: 800;
-          letter-spacing: 2px; cursor: pointer; box-shadow: 0 8px 0 var(--stop-press); }
-  #stop:active { transform: translateY(6px); box-shadow: 0 2px 0 var(--stop-press); }
-  #status { min-height: 1.5em; font-size: 18px; text-align: center; }
-  .ok { color: var(--ok); } .err { color: var(--err); }
-  .hint { color: var(--muted); font-size: 14px; text-align: center; }
-  form { display: flex; gap: 8px; width: min(100%, 420px); }
-  input { flex: 1; min-width: 0; padding: 10px; font-size: 16px; border: 1px solid var(--border);
-          border-radius: 6px; background: var(--field); color: var(--fg); }
-  form button { padding: 10px 14px; font-size: 16px; border-radius: 6px; border: 1px solid var(--border);
-                background: var(--field); color: var(--fg); cursor: pointer; }
-</style>
+<link rel="stylesheet" href="/static/stop.css">
 </head>
 <body>
   <button id="stop" type="button">STOP</button>
@@ -43,53 +25,10 @@
   <div class="hint">Space or Esc also sends STOP.</div>
 
   <form id="token-form">
-    <input id="token" type="password" placeholder="Server token" autocomplete="off">
+    <input id="token" type="password" placeholder="Stop token (or server token)" autocomplete="off">
     <button type="submit">Save</button>
   </form>
 
-<script>
-  const statusEl = document.getElementById("status");
-  const tokenEl = document.getElementById("token");
-
-  // Remember the token in this browser only. Storage can be blocked (private
-  // windows), so every access is guarded and the page still works by typing it.
-  function loadToken() { try { return localStorage.getItem("bridgeToken") || ""; } catch { return ""; } }
-  function saveToken(t) { try { localStorage.setItem("bridgeToken", t); } catch {} }
-  tokenEl.value = loadToken();
-
-  function show(text, cls) { statusEl.textContent = text; statusEl.className = cls; }
-
-  async function sendStop() {
-    const token = tokenEl.value.trim();
-    if (!token) { show("Enter the server token first.", "err"); tokenEl.focus(); return; }
-    show("Sending STOP...", "");
-    try {
-      // Same endpoint the agent uses; the server checks the token.
-      const r = await fetch("/tools/stop", {
-        method: "POST",
-        headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
-        body: "{}",
-      });
-      if (r.status === 401) { show("Wrong token. Robot NOT stopped.", "err"); return; }
-      const data = await r.json();
-      if (data.ok) show("Stopped at " + new Date().toLocaleTimeString(), "ok");
-      else show("Server error: " + (data.error || r.status), "err");
-    } catch (e) {
-      show("Server unreachable. Robot NOT stopped. Use the physical stop.", "err");
-    }
-  }
-
-  document.getElementById("stop").addEventListener("click", sendStop);
-  document.getElementById("token-form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    saveToken(tokenEl.value.trim());
-    show("Token saved.", "ok");
-  });
-  // Keyboard shortcut, except while typing the token.
-  document.addEventListener("keydown", (e) => {
-    if (document.activeElement === tokenEl) return;
-    if (e.key === " " || e.key === "Escape") { e.preventDefault(); sendStop(); }
-  });
-</script>
+<script src="/static/stop.js"></script>
 </body>
 </html>

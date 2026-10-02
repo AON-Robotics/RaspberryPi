@@ -29,6 +29,7 @@ Settings (environment variables)
 import json
 import os
 import sys
+import time
 
 import requests  # small library for making HTTP requests
 
@@ -72,6 +73,91 @@ Rules:
 - Keep moves small, check status() when unsure, and report what the tools
   actually returned, including early stops.
 """
+
+
+def check_pipeline() -> list[dict]:
+    """Check every hop between this app and the robot, in order.
+
+        1. ollama  - Ollama answers at OLLAMA_URL
+        2. model   - MODEL is pulled
+        3. robot   - robot server answers /health (no token needed)
+        4. token   - robot server accepts BRIDGE_TOKEN
+        5. tools   - robot server offers a stop() tool
+
+    Returns one dict per hop: {"name", "ok", "ms", "detail", "fix"}. A hop
+    that depends on a failed one is reported as skipped (ok False) instead of
+    timing out a second time. Never raises, so callers can always show it.
+    """
+    results = []
+
+    def hop(name, fix, check, needs=None):
+        # `needs` is the hop this one depends on; skip if it failed.
+        if needs and not next(r for r in results if r["name"] == needs)["ok"]:
+            results.append({"name": name, "ok": False, "ms": None,
+                            "detail": f"skipped: {needs} failed", "fix": ""})
+            return None
+        start = time.perf_counter()
+        try:
+            detail, value = check()
+            ok = True
+        except requests.ConnectionError:
+            detail, value, ok = "not reachable (connection refused or no route)", None, False
+        except requests.Timeout:
+            detail, value, ok = "no answer within 3 s", None, False
+        except Exception as e:  # any failure is a red light, never a crash
+            detail, value, ok = f"{type(e).__name__}: {e}", None, False
+        results.append({"name": name, "ok": ok,
+                        "ms": round((time.perf_counter() - start) * 1000),
+                        "detail": detail, "fix": "" if ok else fix})
+        return value
+
+    def ollama():
+        r = requests.get(f"{OLLAMA_URL}/api/version", timeout=3)
+        r.raise_for_status()
+        return f"version {r.json().get('version', '?')}", None
+
+    def model():
+        r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=3)
+        r.raise_for_status()
+        names = {m["name"] for m in r.json().get("models", [])}
+        # "qwen3" means "qwen3:latest" to Ollama.
+        wanted = MODEL if ":" in MODEL else f"{MODEL}:latest"
+        if wanted not in names:
+            raise LookupError(f"{MODEL} is not pulled")
+        return MODEL, None
+
+    def robot():
+        r = requests.get(f"{BRIDGE_URL}/health", timeout=3)
+        r.raise_for_status()
+        if not r.json().get("ok"):
+            raise RuntimeError(f"server says not ok: {r.text[:200]}")
+        return BRIDGE_URL, None
+
+    def token():
+        r = requests.get(f"{BRIDGE_URL}/tools", headers=AUTH, timeout=3)
+        if r.status_code == 401:
+            raise PermissionError("server rejected BRIDGE_TOKEN (401)")
+        if r.status_code == 429:
+            raise PermissionError("server is blocking this machine for a minute after "
+                                  "too many wrong tokens (429)")
+        r.raise_for_status()
+        return "accepted", r.json()
+
+    def tools(tool_list):
+        names = [t["function"]["name"] for t in tool_list]
+        if "stop" not in names:
+            raise LookupError(f"no stop() tool; server offers {names}")
+        return ", ".join(names), None
+
+    hop("ollama", "Start Ollama (ollama serve) on this laptop.", ollama)
+    hop("model", f"Run: ollama pull {MODEL}", model, needs="ollama")
+    hop("robot", f"Is the robot server running and reachable at {BRIDGE_URL}? "
+        "Check Tailscale on both machines.", robot)
+    tool_list = hop("token", "BRIDGE_TOKEN here must equal the server's BRIDGE_TOKEN.",
+                    token, needs="robot")
+    hop("tools", "The robot server is missing tools; check server.py.",
+        lambda: tools(tool_list), needs="token")
+    return results
 
 
 def new_conversation() -> list:
@@ -145,6 +231,9 @@ def run_turn(messages: list, tools: list, on_tool=None) -> str:
 
     Returns the model's final text answer.
     """
+    # The model may only call tools the server listed. The name ends up in a
+    # URL, so an invented one like "../x" must never reach the server.
+    allowed = {t["function"]["name"] for t in tools}
     for _ in range(MAX_TOOL_ROUNDS):
         reply = chat(messages, tools)
         messages.append(reply)  # remember what the model said
@@ -158,7 +247,14 @@ def run_turn(messages: list, tools: list, on_tool=None) -> str:
         for call in calls:
             name = call["function"]["name"]
             args = call["function"].get("arguments") or {}
-            result = call_tool(name, args)
+            if name not in allowed:
+                result = {"ok": False, "error": f"There is no tool named {name!r}. "
+                          f"Available tools: {', '.join(sorted(allowed))}."}
+            elif not isinstance(args, dict):
+                result = {"ok": False, "error": "Arguments must be a JSON object "
+                          "like {\"distance_in\": 10}. Call again."}
+            else:
+                result = call_tool(name, args)
             if on_tool:
                 on_tool(name, args, result)
             # Feed the result back as a "tool" message so the model sees it
