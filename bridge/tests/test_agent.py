@@ -25,6 +25,10 @@ def tool_call(name, **args):
     return {"function": {"name": name, "arguments": args}}
 
 
+# What GET /tools would return; run_turn only lets the model call these.
+TOOLS = [{"type": "function", "function": {"name": n}} for n in ("move", "turn", "stop", "status")]
+
+
 def test_fatal_tool_result_stops_the_turn_and_skips_the_rest(monkeypatch, healthy):
     chat, _ = scripted_chat([{"role": "assistant", "content": "",
                               "tool_calls": [tool_call("move", distance_in=10), tool_call("turn", degrees=90)]}])
@@ -36,7 +40,7 @@ def test_fatal_tool_result_stops_the_turn_and_skips_the_rest(monkeypatch, health
     monkeypatch.setattr(loop, "chat", chat)
     monkeypatch.setattr(loop, "call_tool", call_tool)
     messages = loop.new_conversation()
-    answer = loop.run_turn(messages, [])
+    answer = loop.run_turn(messages, TOOLS)
     assert calls == ["move"]  # turn() never ran
     assert answer.startswith("Stopped: the USB serial link between the Pi and the brain failed.")
     assert "cable pulled" in answer
@@ -51,7 +55,7 @@ def test_non_fatal_error_goes_back_to_the_model(monkeypatch, healthy):
     monkeypatch.setattr(loop, "chat", chat)
     monkeypatch.setattr(loop, "call_tool", lambda n, a: {"ok": False, "hop": "brain", "error": "refused",
                                                          "message": "robot is disabled", "fatal": False})
-    assert loop.run_turn(loop.new_conversation(), []) == "The robot is disabled."
+    assert loop.run_turn(loop.new_conversation(), TOOLS) == "The robot is disabled."
     assert '"refused"' in seen[1][-1]["content"]  # the model saw the brain's answer
 
 
@@ -72,3 +76,14 @@ def test_call_tool_marks_server_failures_fatal(monkeypatch):
     monkeypatch.setattr(loop, "BRIDGE_URL", "http://127.0.0.1:9")  # nothing listens on the discard port
     result = loop.call_tool("status", {})
     assert result["fatal"] and result["hop"] == "server" and result["error"] == "server_unreachable"
+
+
+def test_invented_tools_never_reach_the_server(monkeypatch, healthy):
+    chat, seen = scripted_chat([
+        {"role": "assistant", "content": "", "tool_calls": [tool_call("../admin"), tool_call("fly", height=3)]},
+        {"role": "assistant", "content": "I can't do that."},
+    ])
+    monkeypatch.setattr(loop, "chat", chat)
+    monkeypatch.setattr(loop, "call_tool", lambda *a: pytest.fail("must not call the server"))
+    assert loop.run_turn(loop.new_conversation(), TOOLS) == "I can't do that."
+    assert "There is no tool named '../admin'" in seen[1][-2]["content"]

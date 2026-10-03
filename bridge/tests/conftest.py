@@ -9,4 +9,4 @@ sys.path.insert(0, str(BRIDGE / "server"))
 sys.path.insert(0, str(BRIDGE / "agent"))
 
 # loop.py and server.py refuse to import without a token.
-os.environ.setdefault("BRIDGE_TOKEN", "test-token")
+os.environ.setdefault("BRIDGE_TOKEN", "test-token-0123456789abcdefghijklmnop")

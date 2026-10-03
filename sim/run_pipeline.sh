@@ -26,7 +26,9 @@ fi
 cmake -S "$ROOT/sim" -B "$BUILD" >/dev/null
 cmake --build "$BUILD" >/dev/null
 
-export BRIDGE_TOKEN="${BRIDGE_TOKEN:-local-sim-token}"
+# The server refuses tokens under 32 characters; the web chat needs a password.
+export BRIDGE_TOKEN="${BRIDGE_TOKEN:-local-sim-token-0123456789abcdefghijkl}"
+export TEAM_PASSWORD="${TEAM_PASSWORD:-local-sim-password}"
 export BRAIN_PORT="$RUN/brain.tty"
 export BRIDGE_URL="http://127.0.0.1:8000"
 
@@ -40,14 +42,14 @@ for _ in $(seq 50); do
   curl -fs "$BRIDGE_URL/health" | grep -q '"ok":true' && break
   sleep 0.2
 done
-echo "health: $(curl -s "$BRIDGE_URL/health")"
+echo "health: $(curl -s -H "Authorization: Bearer $BRIDGE_TOKEN" "$BRIDGE_URL/health/details")"
 echo "logs:   $RUN/sim.log  $RUN/server.log"
 echo "STOP page: $BRIDGE_URL/stop (token: $BRIDGE_TOKEN)"
 
 if [[ "${WEB:-}" == "1" ]]; then
   (cd "$ROOT/bridge/web" && exec "$PY" -m uvicorn app:app --host 127.0.0.1 --port 8080) &
   WEB_PID=$!
-  echo "web chat: http://localhost:8080  (Ctrl+C to stop)"
+  echo "web chat: http://localhost:8080  password: $TEAM_PASSWORD  (Ctrl+C to stop)"
   wait $WEB_PID
 else
   cd "$ROOT/bridge/agent" && "$PY" agent.py

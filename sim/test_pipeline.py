@@ -20,9 +20,13 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import pytest
+import subprocess
+import sys
 
-from pipeline import TOKEN, Pipeline, free_port
+import pytest
+import requests
+
+from pipeline import SERVER_DIR, TOKEN, Pipeline, free_port
 
 
 @pytest.fixture(scope="module")
@@ -66,8 +70,11 @@ def last_seq(server_log: str, command_prefix: str) -> int:
 def test_health_reports_every_hop(pipe):
     h = pipe.health()
     assert h["ok"] and h["server"]["ok"] and h["serial"]["ok"] and h["brain"]["ok"]
-    assert h["brain"]["robot"] == "sim_small_robot" and h["brain"]["proto"] == 1
-    assert h["brain"]["mode"] == "driver" and h["brain"]["heartbeat_age_ms"] < 1000
+    assert "port" not in h["serial"] and "robot" not in h["brain"]  # public: ok/not-ok only
+    d = pipe.health_details()
+    assert d["brain"]["robot"] == "sim_small_robot" and d["brain"]["proto"] == 1
+    assert d["brain"]["mode"] == "driver" and d["brain"]["heartbeat_age_ms"] < 1000
+    assert d["serial"]["port"].endswith("main.tty")
 
 
 def test_move_round_trip_is_traceable_and_lossless(pipe):
@@ -154,8 +161,10 @@ def test_llm_argument_mistakes_get_a_hint(pipe):
     assert "call turn() as a separate tool call" in r["message"]
     r = pipe.tool("odometry_test", pattern="circle")
     assert "straight, turn, square" in r["message"]
-    r = pipe.tool("move", distance_in="6")  # a number as a string is fine
-    assert r["ok"]
+    r = pipe.tool("move", distance_in="6")  # strict: text is refused, with a hint
+    assert r["error"] == "bad_args" and "plain number" in r["message"]
+    r = pipe.tool("diagnose", active="yes")
+    assert r["error"] == "bad_args" and "true or false" in r["message"]
     r = pipe.tool("fly")
     assert r["error"] == "unknown_tool"
 
@@ -229,7 +238,9 @@ def test_agent_to_brain_and_back(pipe, agent_loop):
     ])
     try:
         loop = agent_loop(pipe, llm)
-        assert loop.check_llm()["ok"]
+        steps = loop.check_pipeline()
+        assert [s["name"] for s in steps] == ["ollama", "model", "robot", "serial", "brain", "token", "tools"]
+        assert all(s["ok"] for s in steps), steps
         tools = loop.get_tools()
         assert {t["function"]["name"] for t in tools} >= {"move", "turn", "stop", "status", "odometry_test",
                                                          "diagnose", "read_sensors", "reset_odometry"}
@@ -352,7 +363,12 @@ def test_brain_program_freezes_mid_move(fresh):
     assert r["fatal"] and r["hop"] == "brain" and r["error"] == "brain_silent", r
     assert not p.health()["brain"]["ok"]
     p.freeze_brain()      # unfreeze: the stale motion gets aborted, link recovers
-    assert p.wait_for_log("sim", "[PI] aborted", timeout=5)
+    # Either the deadman fires first (it heard nothing while frozen) or the
+    # STOP the server queued is read first; both end the motion.
+    deadline = time.time() + 5
+    while time.time() < deadline and not re.search(r"\[PI\] (aborted|link_lost)", p.sim_text()):
+        time.sleep(0.1)
+    assert re.search(r"\[PI\] (aborted|link_lost)", p.sim_text())
     assert p.wait_healthy()["ok"]
     assert p.tool("status")["moving"] is False
 
@@ -416,8 +432,70 @@ def test_garbage_from_the_pi_never_hurts_the_brain(fresh):
 
 
 def test_brain_console_noise_is_tolerated(pipe):
-    assert pipe.health()["serial"]["bad_lines"] == 0
+    assert pipe.health_details()["serial"]["bad_lines"] == 0
     assert "brain console: currentAngleGyro" in pipe.server_text()
+
+
+# =============================================================================
+# 3b. Security layers merged from agent-implementation, on the real server
+# =============================================================================
+
+def test_tokens_and_rate_limit(fresh, tmp_path):
+    p = fresh()
+    stop_token = "stop-only-token-0123456789abcdefghijkl"
+    p.kill_server()
+    p.start_server(extra_env={"STOP_TOKEN": stop_token})
+    p.wait_healthy()
+    url = f"{p.url}/tools"
+
+    # STOP_TOKEN can stop, but not drive or even list the tools.
+    stop_only = {"Authorization": f"Bearer {stop_token}"}
+    assert requests.post(f"{url}/stop", json={}, headers=stop_only, timeout=5).json()["ok"]
+    assert requests.post(f"{url}/move", json={"distance_in": 3}, headers=stop_only, timeout=5).status_code == 401
+    assert requests.get(url, headers=stop_only, timeout=5).status_code == 401
+
+    # 10 wrong tokens per minute -> 429 for everything except STOP. The two
+    # STOP_TOKEN attempts above already count, so 8 more reach the limit.
+    bad = {"Authorization": "Bearer " + "x" * 40}
+    codes = [requests.get(url, headers=bad, timeout=5).status_code for _ in range(9)]
+    assert codes[:8] == [401] * 8 and codes[8] == 429
+    assert requests.post(f"{url}/status", json={}, headers=p.auth, timeout=5).status_code == 429
+    assert requests.post(f"{url}/stop", json={}, headers=p.auth, timeout=5).json()["ok"]  # STOP still works
+    assert '"event": "bad_token"' in p.server_text()                                     # audited
+    assert p.health_text_has_no_token(TOKEN, stop_token)
+
+
+def test_body_limit_headers_and_no_docs(pipe):
+    big = requests.post(f"{pipe.url}/tools/status", data="x" * 5000, headers=pipe.auth, timeout=5)
+    assert big.status_code == 413
+    r = requests.get(f"{pipe.url}/health", timeout=5)
+    assert r.headers["X-Frame-Options"] == "DENY" and "default-src 'none'" in r.headers["Content-Security-Policy"]
+    assert requests.get(f"{pipe.url}/docs", timeout=5).status_code == 404
+    assert requests.get(f"{pipe.url}/stop", timeout=5).status_code == 200
+    assert requests.get(f"{pipe.url}/static/stop.js", timeout=5).status_code == 200
+
+
+def test_short_token_is_refused(tmp_path):
+    env = {**os.environ, "BRIDGE_TOKEN": "short", "BRAIN_PORT": "/dev/null"}
+    out = subprocess.run([sys.executable, "-c", "import server"], cwd=SERVER_DIR, env=env,
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode != 0 and "shorter than 32" in out.stderr
+
+
+def test_pipeline_check_names_the_broken_step(fresh, agent_loop):
+    p = fresh()
+    llm = FakeOllama([])
+    try:
+        loop = agent_loop(p, llm)
+        p.kill_sim()
+        time.sleep(1)
+        steps = {s["name"]: s for s in loop.check_pipeline()}
+    finally:
+        llm.close()
+    assert steps["robot"]["ok"] and not steps["serial"]["ok"]
+    assert "serial" in steps["serial"]["detail"] or "open" in steps["serial"]["detail"]
+    assert "USB cable" in steps["serial"]["fix"]
+    assert steps["brain"]["detail"] == "skipped: serial failed"
 
 
 # =============================================================================
@@ -455,7 +533,8 @@ def test_real_llm_picks_the_right_tools(pipe, monkeypatch):
     import loop
     monkeypatch.setattr(loop, "BRIDGE_URL", pipe.url)
     monkeypatch.setattr(loop, "AUTH", {"Authorization": f"Bearer {TOKEN}"})
-    assert loop.check_llm()["ok"], loop.check_llm()
+    steps = loop.check_pipeline()
+    assert all(s["ok"] for s in steps), steps
     tools = loop.get_tools()
 
     def ask(text):

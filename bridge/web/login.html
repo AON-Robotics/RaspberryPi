@@ -1,0 +1,23 @@
+<!doctype html>
+<!--
+  Login page for the robot chat. The team password (TEAM_PASSWORD on the
+  laptop) is not the robot token: the robot token never leaves the laptop.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot Chat Login</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <form class="login" id="login-form">
+    <h1>Robot Chat</h1>
+    <p>Enter the team password.</p>
+    <input id="password" type="password" autocomplete="current-password" maxlength="256" required>
+    <button type="submit">Log in</button>
+    <div class="err" id="error" aria-live="assertive"></div>
+  </form>
+<script src="/static/login.js"></script>
+</body>
+</html>

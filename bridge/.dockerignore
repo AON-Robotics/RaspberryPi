@@ -1,0 +1,6 @@
+# Never copy secrets or local environments into the image.
+.env
+**/.env
+**/.venv
+**/__pycache__
+**/*.pyc

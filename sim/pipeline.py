@@ -22,7 +22,7 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 SIM = ROOT / "sim" / "build" / "brain_sim"
 SERVER_DIR = ROOT / "bridge" / "server"
-TOKEN = "pipeline-test-token"
+TOKEN = "pipeline-test-token-0123456789abcdefghij"  # server needs >= 32 chars
 
 
 def free_port() -> int:
@@ -58,8 +58,8 @@ class Pipeline:
                 raise RuntimeError("brain_sim did not create its pty")
             time.sleep(0.05)
 
-    def start_server(self) -> None:
-        env = {**os.environ, "BRIDGE_TOKEN": TOKEN, "BRAIN_PORT": str(self.tty)}
+    def start_server(self, extra_env: dict | None = None) -> None:
+        env = {**os.environ, "BRIDGE_TOKEN": TOKEN, "BRAIN_PORT": str(self.tty), **(extra_env or {})}
         log = open(self.server_log, "a")
         self.server = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "server:app", "--host", "127.0.0.1", "--port", str(self.port)],
@@ -104,7 +104,12 @@ class Pipeline:
         return {"Authorization": f"Bearer {TOKEN}"}
 
     def health(self) -> dict:
+        """The public /health: ok/not-ok per hop."""
         return requests.get(f"{self.url}/health", timeout=3).json()
+
+    def health_details(self) -> dict:
+        """/health/details: the full report, needs the token."""
+        return requests.get(f"{self.url}/health/details", headers=self.auth, timeout=3).json()
 
     def wait_healthy(self, timeout: float = 15) -> dict:
         deadline = time.time() + timeout
@@ -125,6 +130,11 @@ class Pipeline:
         return r.json()
 
     # --- logs -------------------------------------------------------------------
+
+    def health_text_has_no_token(self, *tokens: str) -> bool:
+        """The server log (audit lines included) must never contain a token."""
+        text = self.server_text()
+        return not any(t in text for t in tokens)
 
     def sim_text(self) -> str:
         return self.sim_log.read_text(errors="replace")
