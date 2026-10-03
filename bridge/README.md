@@ -176,8 +176,8 @@ the robot.
 | `status()` | Pose, mode, battery, moving, and the health of every hop. |
 | `read_sensors(name)` | Raw values of every sensor registered on the brain. |
 | `reset_odometry(x_in, y_in, heading_deg)` | Set the odometry pose (re-tares the IMU). |
-| `odometry_test(pattern, distance_in, speed_pct)` | Run `straight`, `turn` or `square` and check tracking wheel directions, left/right agreement, heading hold, turn accuracy and closure. Gives a pass/warn/fail verdict with the fix for each problem. |
-| `diagnose(active)` | Check the link, battery, mode, every drive motor, the tracking wheels, the IMU and odometry. `active=true` also spins each side for 0.5 s to catch reversed motors or encoders and swapped ports. |
+| `odometry_test(pattern, distance_in, speed_pct)` | Run `straight`, `turn` or `square` and check tracking wheel directions, left/right agreement, heading hold, turn accuracy and closure. If the Pi's `vexpi` service is streaming OTOS, the test also compares odometry against that independent sensor. Gives a pass/warn/fail verdict with the fix for each problem. |
+| `diagnose(active)` | Check the link, battery, mode, every drive motor, the tracking wheels, the IMU, odometry and the OTOS stream from `vexpi`. `active=true` also spins each side for 0.5 s to catch reversed motors or encoders and swapped ports. |
 
 - **Limits** live in `server/tools/motion.py`: 50% speed, 48 in per move,
   360° per turn. Values over a limit are clamped and reported as

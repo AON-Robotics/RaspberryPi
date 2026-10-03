@@ -1,12 +1,18 @@
 #pragma once
 
+#include "vexpi/otos/otos.hpp"
+
 #include <string>
 
 // Builders for the newline-delimited ASCII packets sent to the V5 brain.
-// See docs/serial-protocol.md for the wire format and the matching
-// brain-side parser sketch.
+// See README.md for the wire format used by the Pi applications.
 namespace vexpi::packet
 {
+
+// Convert an OTOS pose to Override's X-forward, Y-right, clockwise-heading
+// convention and format "O,<x inches>,<y inches>,<heading degrees>\n".
+// Returns an empty string for a non-finite pose or formatting failure.
+std::string otosPose(const Otos::Pose &pose);
 
 // "R,<inches>\n" -- a red target is being tracked at <inches>.
 std::string redTarget(int distanceInches);

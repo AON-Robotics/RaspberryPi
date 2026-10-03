@@ -31,7 +31,8 @@ from pipeline import SERVER_DIR, TOKEN, Pipeline, free_port
 
 @pytest.fixture(scope="module")
 def pipe(tmp_path_factory):
-    p = Pipeline(tmp_path_factory.mktemp("pipeline"), ["--noise"], name="main").start()
+    # --noise: Override's own printf output; --otos: vexpi's 50 Hz OTOS stream.
+    p = Pipeline(tmp_path_factory.mktemp("pipeline"), ["--noise", "--otos"], name="main").start()
     yield p
     p.stop()
 
@@ -434,6 +435,72 @@ def test_garbage_from_the_pi_never_hurts_the_brain(fresh):
 def test_brain_console_noise_is_tolerated(pipe):
     assert pipe.health_details()["serial"]["bad_lines"] == 0
     assert "brain console: currentAngleGyro" in pipe.server_text()
+
+
+# =============================================================================
+# 3a. Sharing the port with vexpi's OTOS stream (main, PR #5)
+# =============================================================================
+
+def test_otos_packets_reach_the_brain_without_reply_traffic(pipe):
+    otos = pipe.tool("read_sensors", name="pi_otos")["sensors"]["pi_otos"]
+    assert otos["seen"] == 1 and otos["age_ms"] < 300
+    truth = pipe.tool("read_sensors", name="sim")["sensors"]["sim"]   # vexpi stand-in streams the true pose
+    assert abs(otos["x"] - truth["truth_x"]) < 0.5 and abs(otos["y"] - truth["truth_y"]) < 0.5
+    before = pipe.tool("read_sensors", name="link")["sensors"]["link"]["packets"]
+    time.sleep(0.5)
+    after = pipe.tool("read_sensors", name="link")["sensors"]["link"]["packets"]
+    assert after - before >= 15                  # ~50 Hz arriving
+    assert "tx @D,0," not in pipe.sim_text()     # and never answered
+
+
+def test_otos_stream_does_not_keep_the_deadman_alive(fresh):
+    p = fresh("--otos")
+    thread, _ = run_in_background(lambda: _swallow(p.tool, "move", distance_in=48, speed_pct=10))
+    assert p.wait_for_log("sim", ",MOVE,48,")
+    time.sleep(0.5)
+    p.kill_server()       # the bridge dies; vexpi keeps streaming O packets
+    assert p.wait_for_log("sim", "[PI] link_lost", timeout=3), "deadman must fire even with OTOS streaming"
+    thread.join(10)
+
+
+def test_unknown_sensor_packets_are_counted_not_answered(fresh):
+    p = fresh()
+    fd = os.open(str(p.tty), os.O_WRONLY | os.O_NOCTTY)
+    try:
+        for line in [b"Z,1,2\n", b"123,0\n", b"O,1.000,2.000,3.000\n"]:
+            os.write(fd, line)
+    finally:
+        os.close(fd)
+    time.sleep(0.3)
+    link = p.tool("read_sensors", name="link")["sensors"]["link"]
+    assert link["unknown_packets"] == 1 and link["ignored_lines"] == 1 and link["packets"] == 1
+    otos = p.tool("read_sensors", name="pi_otos")["sensors"]["pi_otos"]
+    assert (otos["x"], otos["y"], otos["heading"]) == (1, 2, 3)
+    assert "tx @D,0," not in p.sim_text()
+
+
+def test_odometry_test_uses_otos_as_an_independent_check(pipe):
+    r = pipe.tool("odometry_test", pattern="straight", distance_in=12)
+    assert r["verdict"] == "pass" and r["independent_check"].startswith("OTOS")
+    otos = next(c for c in r["checks"] if c["check"] == "odometry_vs_otos_distance")
+    assert otos["status"] == "pass" and abs(otos["otos_in"] - 12) < 1
+    r = pipe.tool("odometry_test", pattern="turn")
+    assert next(c for c in r["checks"] if c["check"] == "imu_vs_otos_rotation")["status"] == "pass"
+
+
+def test_otos_catches_odometry_that_lies(fresh):
+    """A backwards tracking wheel makes odometry under-read; OTOS sees the truth."""
+    p = fresh("--otos", "--fault", "reversed_left_tracking")
+    r = p.tool("odometry_test", pattern="straight", distance_in=12)
+    otos = next(c for c in r["checks"] if c["check"] == "odometry_vs_otos_distance")
+    assert otos["status"] == "fail" and otos["otos_in"] > 10 > otos["odometry_in"]
+
+
+def test_diagnose_reports_the_otos_stream(fresh, pipe):
+    live = {c["check"]: c for c in pipe.tool("diagnose")["checks"]}
+    assert live["otos_stream"]["status"] == "pass"
+    missing = {c["check"]: c for c in fresh().tool("diagnose")["checks"]}
+    assert missing["otos_stream"]["status"] == "warn" and "vexp.service" in missing["otos_stream"]["fix"]
 
 
 # =============================================================================

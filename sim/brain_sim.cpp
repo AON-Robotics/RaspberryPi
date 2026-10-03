@@ -11,8 +11,13 @@
 // /dev/ttyACM1, so pyserial, framing and timing are exercised for real.
 //
 //   brain_sim --link /tmp/brain.tty [--mode driver|disabled|autonomous]
-//             [--fault NAME[,NAME...]] [--noise] [--verbose]
+//             [--fault NAME[,NAME...]] [--noise] [--otos] [--verbose]
 //   brain_sim --checksum "C,1,PING"     print the framed line and exit
+//
+// --otos plays the Pi's vexpi boot service: it writes O,<x>,<y>,<heading>
+// packets (the simulated robot's true pose) into the port at 50 Hz, from the
+// Pi's side, so they arrive mixed with the bridge server's commands exactly as
+// they will on the robot.
 //
 // Faults: reversed_left_tracking, no_imu, dead_motor:<port>,
 //         reversed_motor:<port>, hot_motor:<port>
@@ -340,7 +345,7 @@ int masterFd = -1;
 std::mutex writeMutex;
 
 bool quietLine(const std::string &line) {
-  return !verbose && (line.rfind("@H", 0) == 0 || line.find(",PING") != std::string::npos ||
+  return !verbose && (line.rfind("@H", 0) == 0 || line.rfind("O,", 0) == 0 || line.find(",PING") != std::string::npos ||
                       line.find(",ok,proto=") != std::string::npos);
 }
 
@@ -387,6 +392,7 @@ int main(int argc, char **argv) {
   std::setvbuf(stdout, nullptr, _IOLBF, 0);
   std::string linkPath;
   bool noise = false;
+  bool otos = false;
   for (int i = 1; i < argc; i++) {
     const std::string arg = argv[i];
     if (arg == "--checksum" && i + 1 < argc) {
@@ -397,6 +403,7 @@ int main(int argc, char **argv) {
     else if (arg == "--mode" && i + 1 < argc) mode = argv[++i];
     else if (arg == "--fault" && i + 1 < argc) parseFaults(argv[++i]);
     else if (arg == "--noise") noise = true;
+    else if (arg == "--otos") otos = true;
     else if (arg == "--verbose") verbose = true;
     else {
       std::fprintf(stderr, "usage: brain_sim --link PATH [--mode M] [--fault F] [--noise] [--verbose]\n");
@@ -484,6 +491,21 @@ int main(int argc, char **argv) {
         }
         link.feed(c);
       }
+    }
+  });
+
+  // vexpi stand-in: OTOS pose packets written from the Pi's side of the port,
+  // one write() per line like PacketSender, 50 Hz like OtosStream.
+  std::thread otosStream([&] {
+    while (otos) {
+      const RobotPose t = world.truth();
+      double heading = std::fmod(t.theta, 360.0);
+      if (heading > 180) heading -= 360;
+      if (heading <= -180) heading += 360;
+      char packet[64];
+      const int n = std::snprintf(packet, sizeof(packet), "O,%.3f,%.3f,%.3f\n", t.x, t.y, heading);
+      if (!frozen && ::write(slaveFd, packet, n) != n) std::printf("[sim] otos write failed\n");
+      sleepMs(20);
     }
   });
 

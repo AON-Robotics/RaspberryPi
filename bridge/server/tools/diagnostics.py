@@ -14,7 +14,7 @@ from __future__ import annotations
 from brain_link import LinkError
 
 from . import Busy, brain_failure, busy_result, ctx, ok, tool
-from .odometry import check, verdict
+from .odometry import OTOS_STALE_MS, check, verdict
 
 PROBE_RPM = 100
 PROBE_MS = 500
@@ -100,6 +100,20 @@ def analyze_sensors(s: dict) -> list[dict]:
         checks.append(check("imu", "warn", "IMU is still calibrating", "keep the robot still for a few seconds"))
     elif imu:
         checks.append(check("imu", "pass", f"IMU heading {imu.get('heading')} deg"))
+
+    # OTOS stream from the Pi's vexpi service (O packets). Optional for the
+    # robot, but odometry_test uses it as an independent check.
+    otos = s.get("pi_otos") or {}
+    if not otos.get("seen"):
+        checks.append(check("otos_stream", "warn", "no OTOS packets from vexpi have reached the brain",
+                            "on the Pi: systemctl status vexp.service (sudo systemctl start vexp.service)"))
+    elif (otos.get("age_ms") or 0) > OTOS_STALE_MS:
+        checks.append(check("otos_stream", "warn", f"the last OTOS packet is {otos.get('age_ms')} ms old",
+                            "vexpi stopped sending (OTOS fault or the service stopped): "
+                            "journalctl -u vexp.service -f", age_ms=otos.get("age_ms")))
+    else:
+        checks.append(check("otos_stream", "pass", f"OTOS live: x={otos.get('x')} y={otos.get('y')} "
+                            f"heading={otos.get('heading')} ({otos.get('age_ms')} ms old)"))
 
     odom = s.get("odom") or {}
     if any(odom.get(k) is None for k in ("x", "y", "th")):

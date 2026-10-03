@@ -12,6 +12,12 @@ Override odometry recap (Override/src/aon/odometry/odometry.cpp):
     heading   = IMU (GYRO_CONFIDENCE = 1)
     distance  = average of left/right tracking wheels
     encoder heading change = (left - right) / (offset_left + offset_right)
+
+Independent check: when the Pi's vexpi service is streaming OTOS poses
+(O packets, see docs/serial-protocol.md), the brain keeps the latest one as
+the `pi_otos` sensor. The test reads it before and after a leg and compares
+OTOS's distance/rotation with odometry's. OTOS is a separate optical sensor,
+so agreement means odometry is right, not just self-consistent.
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ from . import Busy, brain_failure, busy_result, ctx, fail, heading_delta, num, o
 from .motion import DEFAULT_SPEED_PCT, MAX_DISTANCE_IN, run_move, run_turn
 
 ORDER = {"pass": 0, "warn": 1, "fail": 2}
+OTOS_STALE_MS = 300  # Override treats an older OTOS pose as stale
 
 
 def check(name: str, status: str, detail: str, fix: str | None = None, **values) -> dict:
@@ -149,6 +156,40 @@ def analyze_closure(start: dict, end: dict, warn_in: float, fail_in: float, warn
     ]
 
 
+def analyze_otos_straight(fields: dict, before: dict, after: dict) -> list[dict]:
+    """Odometry's distance for one MOVE vs the OTOS sensor's."""
+    otos = math.hypot(after["x"] - before["x"], after["y"] - before["y"])
+    odom = float(fields.get("traveled") or 0)
+    diff = abs(odom - otos) / max(otos, 1e-6) * 100
+    ratio = otos / odom if odom else None
+    return [check("odometry_vs_otos_distance", grade(diff, 5, 15),
+                  f"odometry says {odom:.2f} in, OTOS (independent sensor) says {otos:.2f} in",
+                  (f"if OTOS is right, scale TRACKING_WHEEL_DIAMETER by {ratio:.3f}; "
+                   "if not, check the OTOS linear scalar in apps/robot_config.hpp")
+                  if diff > 5 and ratio else None,
+                  odometry_in=odom, otos_in=otos, diff_pct=diff)]
+
+
+def analyze_otos_turn(fields: dict, before: dict, after: dict) -> list[dict]:
+    """IMU's rotation for one TURN vs the OTOS sensor's."""
+    otos = heading_delta(before["heading"], after["heading"])
+    imu = float(fields.get("turned") or 0)
+    return [check("imu_vs_otos_rotation", grade(imu - otos, 3, 10),
+                  f"IMU says {imu:.1f} deg, OTOS (independent sensor) says {otos:.1f} deg",
+                  "one of them is off: check the IMU mounting, or the OTOS angular scalar in "
+                  "apps/robot_config.hpp" if abs(imu - otos) > 3 else None,
+                  imu_deg=imu, otos_deg=otos)]
+
+
+async def otos_now() -> dict | None:
+    """The latest OTOS pose the brain has, or None if vexpi isn't streaming."""
+    msg = await ctx.link.request("SENSORS", "pi_otos", timeout=1.0)
+    otos = msg.fields.get("pi_otos") or {}
+    if msg.status != "ok" or not otos.get("seen") or (otos.get("age_ms") or 10**9) > OTOS_STALE_MS:
+        return None
+    return otos
+
+
 def pose_of(fields: dict, suffix: str) -> dict:
     return {"x_in": float(fields.get("x" + suffix) or 0), "y_in": float(fields.get("y" + suffix) or 0),
             "heading_deg": float(fields.get("th" + suffix) or 0)}
@@ -188,14 +229,19 @@ async def odometry_test(pattern: str, distance_in: float = 24, speed_pct: float 
 
             checks: list[dict] = []
             legs: list[dict] = []
+            # OTOS before and after the first leg, for the independent check.
+            otos_before = await otos_now()
+            otos_after = None
             if pattern == "straight":
                 out = await step("move", distance, speed_pct)
+                otos_after = await otos_now()
                 back = await step("move", -distance, speed_pct)
                 legs = [out, back]
                 checks += analyze_straight(out, distance)
                 checks += analyze_closure(pose_of(out, "0"), pose_of(back, "1"), 1, 3, 2, 5)
             elif pattern == "turn":
                 right = await step("turn", 90, speed_pct)
+                otos_after = await otos_now()
                 left = await step("turn", -90, speed_pct)
                 legs = [right, left]
                 checks += analyze_turn(right, 90, offsets_sum)
@@ -203,10 +249,16 @@ async def odometry_test(pattern: str, distance_in: float = 24, speed_pct: float 
             else:
                 for i in range(4):
                     legs.append(await step("move", distance, speed_pct))
+                    if i == 0:
+                        otos_after = await otos_now()
                     legs.append(await step("turn", 90, speed_pct))
                 checks += analyze_straight(legs[0], distance)
                 checks += analyze_turn(legs[1], 90, offsets_sum)
                 checks += analyze_closure(pose_of(legs[0], "0"), pose_of(legs[-1], "1"), 2, 6, 3, 8)
+
+            if otos_before and otos_after:
+                checks += (analyze_otos_turn(legs[0], otos_before, otos_after) if pattern == "turn"
+                           else analyze_otos_straight(legs[0], otos_before, otos_after))
     except Busy as e:
         return busy_result(str(e))
     except StepFailed as e:
@@ -215,7 +267,9 @@ async def odometry_test(pattern: str, distance_in: float = 24, speed_pct: float 
         return e.to_result()
 
     first = legs[0]
-    return ok(pattern=pattern, verdict=verdict(checks),
+    independent = ("OTOS (vexpi) compared against odometry" if otos_before and otos_after else
+                   "none: no fresh OTOS packets from vexpi, so only odometry's self-consistency was checked")
+    return ok(pattern=pattern, verdict=verdict(checks), independent_check=independent,
               checks=checks,
               problems=[f"{c['check']}: {c['detail']}" + (f" -> {c['fix']}" if c.get("fix") else "")
                         for c in checks if c["status"] != "pass"],

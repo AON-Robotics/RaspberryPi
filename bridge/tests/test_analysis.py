@@ -1,7 +1,8 @@
 """Odometry-test and diagnostic analysis on synthetic brain replies."""
 
 from tools.diagnostics import analyze_probe, analyze_sensors
-from tools.odometry import analyze_closure, analyze_straight, analyze_turn, verdict
+from tools.odometry import (analyze_closure, analyze_otos_straight, analyze_otos_turn, analyze_straight,
+                            analyze_turn, verdict)
 
 
 def statuses(checks):
@@ -78,3 +79,13 @@ def test_probe_finds_backwards_motor_and_tracking_wheel():
     assert s["probe_left_tracking"] == "fail"     # backwards
     assert s["probe_right_tracking"] == "pass"
     assert s["probe_imu_L"] == "pass" and s["probe_imu_R"] == "pass"
+
+
+def test_otos_cross_check():
+    before, after = {"x": 0, "y": 0, "heading": 0}, {"x": 24, "y": 0.5, "heading": 0}
+    good = analyze_otos_straight({"traveled": 24.1}, before, after)[0]
+    assert good["status"] == "pass"
+    short = analyze_otos_straight({"traveled": 20.0}, before, after)[0]
+    assert short["status"] == "fail" and "TRACKING_WHEEL_DIAMETER by 1.2" in short["fix"]
+    turn = analyze_otos_turn({"turned": 90.5}, {"heading": 179}, {"heading": -91})[0]
+    assert turn["status"] == "pass" and abs(turn["otos_deg"] - 90) < 0.01   # across the 180 seam

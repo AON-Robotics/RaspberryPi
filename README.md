@@ -1,108 +1,101 @@
-# RaspberryPi
+# Raspberry Pi VEX coprocessor
 
-Raspberry Pi 5 coprocessor software for AON Robotics.
+The team's Raspberry Pi is already set up. The project lives at
+`/home/aonpi/RaspberryPi5VEX`, and `vexp.service` automatically runs
+`build/vexpi` when the Pi boots.
 
-The Pi does the work the V5 brain cannot: stereo depth from an OAK-D Lite and
-optical odometry from a SparkFun Qwiic OTOS. It reduces both to small ASCII
-packets and streams them to the brain over USB serial, so the auton routine on
-the brain stays simple and just reads numbers.
+The main runtime reads OTOS and sends pose packets to the VEX V5 User Port.
+Keep the robot flat and still when starting it so OTOS can calibrate.
 
-## What is in here
+## Turn the runtime on or off
 
-| Program | Does |
+```bash
+sudo systemctl start vexp.service    # On
+sudo systemctl stop vexp.service     # Off until started again or the Pi reboots
+sudo systemctl restart vexp.service  # Restart and recalibrate
+```
+
+Check whether it is running and view its logs:
+
+```bash
+systemctl status vexp.service
+journalctl -u vexp.service -f
+```
+
+Press Ctrl-C to leave the log viewer; the runtime keeps running.
+For boot on/off controls and updating code, see [deployment.md](docs/deployment.md).
+
+## Where to put your code
+
+| What you are adding | Where it belongs |
 | --- | --- |
-| `red_tracker` | Finds the nearest red target with the OAK-D Lite and streams its distance to the brain. The main program. |
-| `otos_monitor` | Live pose read-out from the OTOS. Use it to check wiring and to measure the drift scalars. |
-| `depth_center_demo` | Distance to whatever is at the centre of the frame, with a preview window. The fallback for checking the camera itself. |
+| A sensor or other component | Implementation in `src/<component>/`, headers in `include/vexpi/<component>/` |
+| Startup and shutdown for a component that runs on the robot | `apps/main.cpp` |
+| Robot OTOS offsets and scalars | `apps/robot_config.hpp` |
+| Camera processing | `src/vision/` and `include/vexpi/vision/` |
+| Shared V5 serial communication | `src/serial/` and `include/vexpi/serial/` |
+| Packet formats | `src/protocol/` and `include/vexpi/protocol/` |
+| A standalone demo or diagnostic | `apps/` (camera demos go in `apps/vision/`) |
+| Tests | `tests/<component>/` (C++), `bridge/tests/` and `sim/` (LLM bridge) |
+| An LLM bridge tool | `bridge/server/tools/` (see [bridge/README.md](bridge/README.md)) |
+| Sources and libraries to build | `CMakeLists.txt` |
 
-## Layout
+To run your component **alongside OTOS at boot**, wire its worker into
+`apps/main.cpp` and include its sources/library in the `vexpi` build. Adding a
+file or a standalone executable alone does not make it start automatically.
+See [Adding a component to the boot runtime](docs/deployment.md#adding-a-component-to-the-boot-runtime)
+for the steps.
 
-```
-include/vexpi/     Public headers
-  serial_link.hpp      RAII USB serial link to the V5 brain
-  vex_packet.hpp       Wire format builders
-  units.hpp            metres/radians <-> inches/degrees
-  otos.hpp             SparkFun Qwiic OTOS driver (I2C)
-  oak_camera.hpp       OAK-D Lite pipeline, synchronised RGB + depth
-  red_target_tracker.hpp   Red blob detection, depth sampling, filtering
-src/               Implementations of the above
-apps/              One main() per program, each a thin wrapper
-docs/              Serial protocol (both directions)
-bridge/            LLM debugging bridge: robot tool server (runs on the Pi),
-                   agent loop and web chat (run on a laptop)
-sim/               Laptop-only brain simulator and end-to-end tests
-```
+Camera programs (`red_tracker` and `depth_center_demo`) are currently separate
+diagnostics. They do not run inside `vexpi`. Components running together must
+share the runtime's `PacketSender` instead of opening competing V5 connections.
 
-The bridge talks to the brain code in the Override repo
-(`src/aon/pi/`); see [bridge/README.md](bridge/README.md).
-
-Two libraries get built. `vexpi_core` is the serial link, packet format and
-OTOS driver — it depends on nothing but pthreads. `vexpi_vision` adds the
-camera and tracking, and pulls in OpenCV and DepthAI. `otos_monitor` links only
-the former, so odometry work does not need the camera SDK present.
-
-## Building
-
-Needs CMake 3.20+, a C++17 compiler, OpenCV 4, and
-[depthai-core](https://github.com/luxonis/depthai-core) v2 installed where
-CMake can find it.
+## Apply your changes
 
 ```bash
-cmake -S . -B build
-cmake --build build -j4
+cd /home/aonpi/RaspberryPi5VEX
+sudo systemctl stop vexp.service
+cmake -S . -B build && cmake --build build -j"$(nproc)" && ctest --test-dir build --output-on-failure && sudo systemctl start vexp.service
 ```
 
-Binaries land in `build/`. To build without the camera SDK:
+If configure, build, or tests fail, fix the error and rerun the command. The
+runtime stays stopped until all steps succeed. No service reinstall is needed
+for normal C++ changes.
+
+OTOS sends `O,<x inches>,<y inches>,<heading degrees>` packets. Packet formats
+and V5 receiver guidance are in [serial-protocol.md](docs/serial-protocol.md).
+
+## LLM debugging bridge
+
+`bridge/` lets the team debug the robot by chatting with it: "drive 12 inches",
+"run an odometry test", "check the drivetrain". It has three parts:
+
+- **Robot tool server:** runs on this Pi (`bridge/server`) and sends commands to
+  the brain over the same USB user port. It shares the port safely with
+  `vexpi`; see [serial-protocol.md](docs/serial-protocol.md#sharing-the-port).
+- **Brain side:** lives in the Override repo (`src/aon/pi/`).
+- **LLM and chat page:** run on a laptop.
+
+Setup, tools and security are in [bridge/README.md](bridge/README.md); the team
+overview is in [bridge/OVERVIEW.md](bridge/OVERVIEW.md).
+
+`sim/` runs the whole bridge on a laptop against a simulated brain, so it can
+be tested without the Pi or the robot.
+
+## Running every test
 
 ```bash
-cmake -S . -B build -DVEXPI_BUILD_VISION=OFF
+./run_tests.sh            # everything that can run on this machine
+./run_tests.sh --quick    # skip the slow end-to-end tests
+./run_tests.sh --ollama   # also drive the simulated robot with the local LLM
 ```
 
-## Running
+It builds what it needs and prints one PASS/FAIL/SKIP line per suite:
+- C++ unit tests (`ctest`)
+- the Override brain code check
+- bridge unit tests
+- end-to-end pipeline tests
+- optionally, the real LLM
 
-```bash
-./build/red_tracker                  # default /dev/ttyACM1, the brain's user port
-./build/red_tracker /dev/ttyACM0     # or name the port (e.g. through a controller)
-
-./build/otos_monitor                 # default /dev/i2c-1
-```
-
-Neither program needs the brain attached — if the serial port cannot be
-opened they warn once and carry on, which is how you tune at a desk.
-
-Your user needs to be in the `dialout` group for the serial port and `i2c` for
-the OTOS:
-
-```bash
-sudo usermod -aG dialout,i2c $USER   # log out and back in
-i2cdetect -y 1                       # OTOS should answer at 0x17
-```
-
-## Tuning
-
-**Red thresholds** live in `RedTrackerConfig` in
-[red_target_tracker.hpp](include/vexpi/red_target_tracker.hpp). Red straddles
-the wrap-around point of the HSV hue circle, so it takes two bands. Field
-lighting moves these — if the mask picks up the floor, raise the saturation
-and value minimums before touching hue.
-
-**Depth range** is clamped to 150–1820 mm. The lower bound is what extended
-disparity makes reachable on an OAK-D Lite; below it the stereo pair has no
-overlap and the readings are fiction.
-
-**OTOS offsets and scalars** are robot-specific and live in `tuneOtos()` in
-[apps/otos_monitor.cpp](apps/otos_monitor.cpp). Measure them on your robot:
-push a known distance and set the linear scalar to actual/reported, spin a
-known number of turns for the angular one.
-
-## Notes on the camera
-
-The RGB preview and the aligned depth output must be the same size and share
-the RGB sensor's 16:9 aspect ratio, since it runs at 1080p. Use 640x360, not
-640x480 — at 4:3 the two images do not line up pixel for pixel and the depth
-sampled inside a colour mask belongs to something else.
-
-Extended disparity and the on-device median filter are mutually exclusive, so
-the filter is switched off whenever extended disparity is on. The tracker makes
-up for it on the host: the reported distance is a median over the masked pixels
-and then a rolling median over the last five frames.
+Suites that need something this machine lacks (Linux I²C headers, the Override
+repo, Ollama) are skipped, and the summary says why.

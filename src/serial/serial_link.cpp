@@ -1,10 +1,13 @@
-#include "vexpi/serial_link.hpp"
+#include "vexpi/serial/serial_link.hpp"
 
 #include <cerrno>
+#include <chrono>
+#include <poll.h>
 #include <cstring>
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
+#include <utility>
 
 namespace vexpi
 {
@@ -35,7 +38,7 @@ bool SerialLink::open(const std::string &device)
     close();
     device_ = device;
 
-    fd_ = ::open(device.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
+    fd_ = ::open(device.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (fd_ < 0)
     {
         lastError_ = "could not open " + device + ": " + std::strerror(errno);
@@ -95,11 +98,41 @@ bool SerialLink::write(const std::string &payload)
     if (fd_ < 0)
         return false;
 
-    const ssize_t written = ::write(fd_, payload.c_str(), payload.size());
-    if (written < 0)
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+    size_t sent = 0;
+    while (sent < payload.size())
     {
-        lastError_ = std::string("serial write failed: ") + std::strerror(errno);
-        return false;
+        if (std::chrono::steady_clock::now() >= deadline)
+        {
+            lastError_ = "serial write timed out";
+            return false;
+        }
+        const ssize_t written = ::write(fd_, payload.data() + sent, payload.size() - sent);
+        if (written < 0 && errno == EINTR)
+            continue;
+        if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        {
+            pollfd pending{fd_, POLLOUT, 0};
+            const int ready = ::poll(&pending, 1, 10);
+            if (ready < 0 && errno != EINTR)
+            {
+                lastError_ = std::string("serial poll failed: ") + std::strerror(errno);
+                return false;
+            }
+            if (ready > 0 && (pending.revents & (POLLERR | POLLHUP | POLLNVAL)))
+            {
+                lastError_ = "serial device disconnected";
+                return false;
+            }
+            continue;
+        }
+        if (written <= 0)
+        {
+            lastError_ = std::string("serial write failed: ") +
+                         (written < 0 ? std::strerror(errno) : "zero-byte write");
+            return false;
+        }
+        sent += static_cast<size_t>(written);
     }
     return true;
 }

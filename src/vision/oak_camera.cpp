@@ -1,4 +1,4 @@
-#include "vexpi/oak_camera.hpp"
+#include "vexpi/vision/oak_camera.hpp"
 
 #include <chrono>
 
