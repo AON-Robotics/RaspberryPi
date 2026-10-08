@@ -58,13 +58,18 @@ AUTH = {"Authorization": f"Bearer {BRIDGE_TOKEN}"}
 
 # The "system" message is standing instructions the model sees before any
 # user message. It sets the model's role and habits.
+# Don't name specific motion tools here: the server owns the tool list, and
+# when this prompt mentioned a drive() the server no longer had, qwen3
+# answered with nothing at all.
 SYSTEM_PROMPT = """\
 You help debug a VEX robot. Use the tools to move it or read its state.
 
 Rules:
-- One motion per tool call. drive() only moves straight; turn() only rotates.
-  For "drive 10 inches then turn left", call drive, wait for its result,
-  then call turn.
+- One motion per tool call. Each motion tool does one thing: one drives
+  straight, another rotates in place. For "drive 10 inches then turn left",
+  call the straight-driving tool, wait for its result, then call the turn tool.
+- Follow each tool's description exactly, especially which sign means
+  forward/backward and left/right.
 - Only pass the arguments a tool lists. Never invent arguments.
 - If a tool returns an error, read it, fix the arguments, and call again.
   Do not ask the user to rephrase because of a tool error.
@@ -167,6 +172,18 @@ def new_conversation() -> list:
     return [{"role": "system", "content": SYSTEM_PROMPT}]
 
 
+def system_prompt(tools: list) -> str:
+    """SYSTEM_PROMPT plus the server's current tool names and descriptions.
+
+    With thinking off, qwen3 often answered with nothing at all (no text, no
+    tool call) unless the prompt itself named the tools. Building the list
+    from the server keeps it right when tools are renamed (drive -> move).
+    """
+    summary = "\n".join(f"- {t['function']['name']}: {t['function'].get('description', '')}"
+                        for t in tools)
+    return f"{SYSTEM_PROMPT}\nTools available right now (use these exact names):\n{summary}\n"
+
+
 def get_tools() -> list:
     """Ask the robot server which tools it has (also checks link + token).
 
@@ -236,14 +253,25 @@ def run_turn(messages: list, tools: list, on_tool=None) -> str:
     # The model may only call tools the server listed. The name ends up in a
     # URL, so an invented one like "../x" must never reach the server.
     allowed = {t["function"]["name"] for t in tools}
+    # Refresh the standing instructions with the tools the server has now.
+    if messages and messages[0].get("role") == "system":
+        messages[0] = {"role": "system", "content": system_prompt(tools)}
+    retried = False
     for _ in range(MAX_TOOL_ROUNDS):
         reply = chat(messages, tools)
+        calls = reply.get("tool_calls") or []
+        content = (reply.get("content") or "").strip()
+        if not calls and not content and not retried:
+            # An empty answer is a model glitch, not an answer: ask once more
+            # without keeping the empty message in the history.
+            retried = True
+            continue
         messages.append(reply)  # remember what the model said
 
-        calls = reply.get("tool_calls") or []
         if not calls:
             # No tool calls means this is the final answer.
-            return (reply.get("content") or "").strip()
+            return content or ("(The model gave an empty answer. Try rephrasing, "
+                               "e.g. \"move forward 10 inches\".)")
 
         # The model may ask for several tools at once; run them in order.
         for call in calls:
