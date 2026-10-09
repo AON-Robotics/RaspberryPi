@@ -89,3 +89,12 @@ def test_otos_cross_check():
     assert short["status"] == "fail" and "TRACKING_WHEEL_DIAMETER by 1.2" in short["fix"]
     turn = analyze_otos_turn({"turned": 90.5}, {"heading": 179}, {"heading": -91})[0]
     assert turn["status"] == "pass" and abs(turn["otos_deg"] - 90) < 0.01   # across the 180 seam
+
+
+def test_facing_labels_cover_the_circle():
+    from tools import facing
+    assert facing(0.4).startswith("forward") and facing(-12).startswith("forward")
+    assert facing(89.7) == "right" and facing(-90.04) == "left"
+    assert facing(179.85) == "backwards" and facing(-179.9) == "backwards" and facing(540) == "backwards"
+    assert facing(45) == "forward-right" and facing(-135) == "backward-left"
+    assert facing(None) is None

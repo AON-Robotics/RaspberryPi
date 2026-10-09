@@ -123,9 +123,32 @@ def num(value, digits: int = 2):
     return value
 
 
+def facing(heading_deg) -> str | None:
+    """A plain-words label for a heading, so the LLM never interprets angles.
+
+    Heading is degrees clockwise from the direction the robot faced when
+    odometry was reset. The model kept describing 180 as "left" (it mixed it
+    up with the -90 it had just turned), so the server says it instead.
+    """
+    if not isinstance(heading_deg, (int, float)) or not math.isfinite(heading_deg):
+        return None
+    h = (heading_deg + 180.0) % 360.0 - 180.0  # -180..180
+    if abs(h) <= 20:
+        return "forward (the starting direction)"
+    if abs(h) >= 160:
+        return "backwards"
+    if 70 <= h <= 110:
+        return "right"
+    if -110 <= h <= -70:
+        return "left"
+    side = "right" if h > 0 else "left"
+    return f"forward-{side}" if abs(h) < 90 else f"backward-{side}"
+
+
 def pose(fields: dict, suffix: str = "") -> dict:
+    heading = num(fields.get("th" + suffix))
     return {"x_in": num(fields.get("x" + suffix)), "y_in": num(fields.get("y" + suffix)),
-            "heading_deg": num(fields.get("th" + suffix))}
+            "heading_deg": heading, "facing": facing(heading)}
 
 
 def heading_delta(a: float, b: float) -> float:

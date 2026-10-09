@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from brain_link import LinkError
 
-from . import brain_failure, ctx, num, ok, tool
+from . import brain_failure, ctx, ok, pose, tool
 
 
 @tool("status", "Read the robot's pose (from its odometry), battery, mode, whether it is moving, and the "
@@ -18,7 +18,7 @@ async def status() -> dict:
     if msg.status != "ok":
         return brain_failure(msg, link=health)
     f = msg.fields
-    return ok(pose={"x_in": num(f.get("x")), "y_in": num(f.get("y")), "heading_deg": num(f.get("th"))},
+    return ok(pose=pose(f),
               mode=f.get("mode"), moving=bool(f.get("pi")), busy=f.get("busy"),
               battery_pct=f.get("bat"), can_move=bool(f.get("can_move")), cannot_move_because=f.get("why"),
               last_command=ctx.last_command, current_motion=ctx.current_motion, link=health)
