@@ -396,9 +396,13 @@ def stop(request: Request, sid: str = Depends(logged_in)) -> dict:
     result = loop.call_tool("stop", {})
     audit("stop", client_ip(request), ok=result.get("ok"))
     if not result.get("ok"):
-        audit("error", client_ip(request), where="stop", error=str(result.get("error"))[:300])
-        raise HTTPException(502, "Robot NOT confirmed stopped: "
-                                 f"{result.get('message') or result.get('error')}")
+        # Full detail (server address, raw error) goes to the audit log only;
+        # the page gets which hop failed, like the rest of this app.
+        audit("error", client_ip(request), where="stop", error=str(result.get("error"))[:300],
+              hop=result.get("hop"), detail=str(result.get("message"))[:300])
+        hop = loop.HOPS.get(result.get("hop"), "the robot link")
+        raise HTTPException(502, f"Robot NOT confirmed stopped: {hop} failed "
+                                 f"({result.get('error')}). Use the backup STOP page or the physical stop.")
     return result
 
 

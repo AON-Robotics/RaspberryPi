@@ -110,9 +110,10 @@ Rules:
 - Follow each tool's description exactly, especially which sign means
   forward/backward and left/right.
 - Only pass the arguments a tool lists. Never invent arguments.
-- If a tool returns an error with "hop": "server" and "error": "bad_args",
-  fix the arguments and call again. For any other error, do not retry the
-  same motion: tell the user the "message" in plain words.
+- If a tool returns "error": "bad_args" or "unknown_tool", read its
+  "message", fix the tool name or arguments, and call again. For any other
+  error, do not retry the same motion: tell the user the "message" in plain
+  words.
 - If a result says "clamped": true, tell the user what was actually done.
 - Never compute or guess the robot's position or heading yourself. When the
   user asks where the robot is, call status() and report what it returns.

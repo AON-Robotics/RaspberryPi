@@ -116,3 +116,9 @@ def test_system_prompt_lists_the_live_tools_every_turn(monkeypatch, healthy):
     system = seen[0][0]["content"]
     assert system.startswith(loop.SYSTEM_PROMPT)            # our rules stay the base
     assert "- move: Drive straight." in system and "- turn: Positive is clockwise." in system
+
+
+def test_prompt_lets_the_model_fix_unknown_tools_and_bad_args():
+    # run_turn marks invented tool names as hop "llm"; the model must be told
+    # it may retry those (with the right name), not report them to the user.
+    assert '"unknown_tool"' in loop.SYSTEM_PROMPT and '"bad_args"' in loop.SYSTEM_PROMPT
