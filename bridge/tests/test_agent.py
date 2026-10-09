@@ -87,3 +87,32 @@ def test_invented_tools_never_reach_the_server(monkeypatch, healthy):
     monkeypatch.setattr(loop, "call_tool", lambda *a: pytest.fail("must not call the server"))
     assert loop.run_turn(loop.new_conversation(), TOOLS) == "I can't do that."
     assert "There is no tool named '../admin'" in seen[1][-2]["content"]
+
+
+# --- From the laptop's fix (d0455a6): empty replies and the live tool list ---
+
+def test_empty_reply_is_retried_once_and_not_kept(monkeypatch, healthy):
+    chat, seen = scripted_chat([{"role": "assistant", "content": ""},
+                                {"role": "assistant", "content": "Done."}])
+    monkeypatch.setattr(loop, "chat", chat)
+    messages = loop.new_conversation()
+    assert loop.run_turn(messages, TOOLS) == "Done."
+    assert len(seen) == 2                                    # asked twice
+    assert not any(m.get("role") == "assistant" and not m.get("content") for m in messages)
+
+
+def test_still_empty_gives_a_clear_message(monkeypatch, healthy):
+    chat, _ = scripted_chat([{"role": "assistant", "content": ""}, {"role": "assistant", "content": ""}])
+    monkeypatch.setattr(loop, "chat", chat)
+    assert loop.run_turn(loop.new_conversation(), TOOLS).startswith("(The model gave an empty answer.")
+
+
+def test_system_prompt_lists_the_live_tools_every_turn(monkeypatch, healthy):
+    chat, seen = scripted_chat([{"role": "assistant", "content": "ok"}])
+    monkeypatch.setattr(loop, "chat", chat)
+    tools = [{"type": "function", "function": {"name": "move", "description": "Drive straight."}},
+             {"type": "function", "function": {"name": "turn", "description": "Positive is clockwise."}}]
+    loop.run_turn(loop.new_conversation(), tools)
+    system = seen[0][0]["content"]
+    assert system.startswith(loop.SYSTEM_PROMPT)            # our rules stay the base
+    assert "- move: Drive straight." in system and "- turn: Positive is clockwise." in system
