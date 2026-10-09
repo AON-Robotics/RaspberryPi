@@ -236,5 +236,80 @@ sim/run_pipeline.sh --fault reversed_motor:13          # a robot with a wiring f
 WEB=1 sim/run_pipeline.sh                              # web chat on :8080
 ```
 
+### Simulated robot, real laptop (one machine plays the Pi)
+
+To test the web chat on the laptop without a Pi or a robot, any Mac or Linux
+machine on the tailnet can play the Pi. It runs the simulated brain and the
+real robot server; the laptop runs Ollama and the web chat exactly as it would
+with the real robot.
+
+```
+Laptop (Windows): Ollama + web/app.py ──Tailscale + token──▶ "Pi" machine: server.py ──pty──▶ brain_sim
+```
+
+**On the machine playing the Pi** (Mac or Linux; `brain_sim` needs a pseudo-
+terminal, so not Windows), from the RaspberryPi repo root:
+
+1. **Once:** build the simulator and install the server's packages. The
+   Override repo must be next to this one, or pass `-DOVERRIDE_DIR=...`.
+   ```bash
+   cmake -S sim -B sim/build && cmake --build sim/build
+   python3 -m venv bridge/.venv && bridge/.venv/bin/pip install -r bridge/server/requirements.txt
+   ```
+2. **Once:** put the token in `bridge/.env` (git-ignored). The laptop must use
+   the **same** value; a different one gives `401 bad or missing token`.
+   ```
+   BRIDGE_TOKEN=<at least 32 characters, see step 1 above>
+   ```
+3. **Terminal 1:** start the simulated brain. `--otos` also plays `vexpi`, and
+   `--noise` adds robot console output, like the real thing.
+   ```bash
+   mkdir -p sim/build/run
+   sim/build/brain_sim --link "$PWD/sim/build/run/brain.tty" --otos --noise
+   ```
+4. **Terminal 2:** start the robot server on this machine's Tailscale IP, using
+   the token from `.env`, pointed at the simulator.
+   ```bash
+   cd bridge/server
+   set -a; . ../.env; set +a
+   BRAIN_PORT="$PWD/../../sim/build/run/brain.tty" ../.venv/bin/python -m uvicorn server:app \
+     --host "$(tailscale ip -4)" --port 8000 --no-server-header
+   ```
+5. **Check it** from this machine. You want `"ok":true` with server, serial and
+   brain all ok.
+   ```bash
+   curl "http://$(tailscale ip -4):8000/health"
+   ```
+6. Note this machine's Tailscale IP (`tailscale ip -4`); the laptop needs it.
+   Ctrl+C in both terminals stops everything. The simulated robot starts again
+   at (0, 0) next time.
+
+**On the laptop:**
+
+1. `bridge/.env`:
+   ```
+   BRIDGE_URL=http://<that machine's Tailscale IP>:8000
+   BRIDGE_TOKEN=<the same value as on that machine>
+   TEAM_PASSWORD=<at least 16 characters>
+   ```
+2. Ollama running with `qwen3:8b` ([section 3](#3-laptop-ollama)).
+3. Start the web chat ([section 4a](#4a-laptop-web-chat-for-the-team), Docker or
+   the PowerShell commands), open `http://localhost:8080` and log in with
+   `TEAM_PASSWORD`.
+4. All seven lights should be green: ollama, model, robot, serial, brain,
+   token, tools. Hover over a red one to see why it's down.
+
+**If something is red:**
+
+| Light | Usual cause |
+| --- | --- |
+| robot | The server isn't running, a wrong IP in `BRIDGE_URL`, or Tailscale is off on one side |
+| serial / brain | `brain_sim` isn't running, or `BRAIN_PORT` points to the wrong path |
+| token | `BRIDGE_TOKEN` differs between the two machines |
+| ollama / model | Ollama isn't running on the laptop, or `qwen3:8b` isn't pulled |
+
+Everything on one machine instead (server, simulator, and chat): use
+`sim/run_pipeline.sh` above.
+
 To run every test, use `./run_tests.sh` at the repo root (see the top-level
 README).
