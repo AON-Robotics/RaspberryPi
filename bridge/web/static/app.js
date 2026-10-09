@@ -121,7 +121,7 @@ async function logout() {
 }
 
 // Status lights: one per hop (Ollama, model, robot server, serial, brain, token, tools).
-const HOP_LABELS = { ollama: "Ollama", model: "Model", robot: "Robot link", token: "Token", tools: "Tools" };
+const HOP_LABELS = { ollama: "Ollama", model: "Model", robot: "Robot link", serial: "Serial", brain: "Brain", token: "Token", tools: "Tools" };
 
 async function checkHealth() {
   try {
