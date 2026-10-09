@@ -47,6 +47,12 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 # qwen3:8b tested far more reliable at tool calling than hermes3 (which kept
 # inventing arguments). Any Ollama model with tool support works here.
 MODEL = os.environ.get("MODEL", "qwen3:8b")
+# How long Ollama keeps the model in memory after a request. Its default is
+# 5 minutes; reloading qwen3:8b on the laptop takes ~45 s and can fail when
+# RAM is short (a game open), so keep it loaded through a demo.
+OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "30m")
+# One retry for a failed load: Ollama's own next attempt usually works.
+OLLAMA_RETRY_DELAY_S = 3
 
 # Safety valve: a confused model could keep calling tools forever. After this
 # many rounds for a single request, we give up and hand control back.
@@ -115,6 +121,9 @@ Rules:
   error, do not retry the same motion: tell the user the "message" in plain
   words.
 - If a result says "clamped": true, tell the user what was actually done.
+- Heading is in degrees, clockwise from the direction the robot faced when
+  odometry was reset: 0 = that direction, 90 = turned right, -90 = turned
+  left, 180 or -180 = facing backwards.
 - Never compute or guess the robot's position or heading yourself. When the
   user asks where the robot is, call status() and report what it returns.
 - To check the drivetrain or odometry, use diagnose() (active=true to also
@@ -307,7 +316,7 @@ def chat(messages: list, tools: list) -> dict:
         {"role": "assistant", "content": "", "tool_calls": [
             {"function": {"name": "drive", "arguments": {"distance_in": 10}}}]}
     """
-    r = requests.post(f"{OLLAMA_URL}/api/chat", timeout=120, json={
+    body = {
         "model": MODEL,
         "messages": messages,
         "tools": tools,
@@ -316,9 +325,23 @@ def chat(messages: list, tools: list) -> dict:
         # each reply take minutes. Tool picking works fine without it.
         # Models that don't support thinking ignore this.
         "think": False,
-    })
-    r.raise_for_status()
-    return r.json()["message"]
+        "keep_alive": OLLAMA_KEEP_ALIVE,
+    }
+    # Ollama answers 500 (or drops the connection) when loading the model
+    # fails, e.g. out of memory while a game is open. Its next load attempt
+    # usually works, so try once more before the turn is stopped.
+    for attempt in (1, 2):
+        try:
+            r = requests.post(f"{OLLAMA_URL}/api/chat", timeout=120, json=body)
+            if r.status_code >= 500 and attempt == 1:
+                time.sleep(OLLAMA_RETRY_DELAY_S)
+                continue
+            r.raise_for_status()
+            return r.json()["message"]
+        except requests.ConnectionError:
+            if attempt == 2:
+                raise
+            time.sleep(OLLAMA_RETRY_DELAY_S)
 
 
 def run_turn(messages: list, tools: list, on_tool=None) -> str:

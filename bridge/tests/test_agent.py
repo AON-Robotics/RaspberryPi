@@ -122,3 +122,46 @@ def test_prompt_lets_the_model_fix_unknown_tools_and_bad_args():
     # run_turn marks invented tool names as hop "llm"; the model must be told
     # it may retry those (with the right name), not report them to the user.
     assert '"unknown_tool"' in loop.SYSTEM_PROMPT and '"bad_args"' in loop.SYSTEM_PROMPT
+
+
+# --- From the laptop's Tailscale test: Ollama failing to load the model ---
+
+class FakeResponse:
+    def __init__(self, status, message=None):
+        self.status_code, self._message = status, message
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code} Server Error")
+
+    def json(self):
+        return {"message": self._message}
+
+
+def test_chat_retries_once_when_ollama_fails_to_load(monkeypatch):
+    replies = [FakeResponse(500), FakeResponse(200, {"role": "assistant", "content": "hi"})]
+    sent = []
+    monkeypatch.setattr(loop, "OLLAMA_RETRY_DELAY_S", 0)
+    monkeypatch.setattr(loop.requests, "post", lambda url, timeout, json: sent.append(json) or replies.pop(0))
+    assert loop.chat([], []) == {"role": "assistant", "content": "hi"}
+    assert len(sent) == 2 and sent[0]["keep_alive"] == loop.OLLAMA_KEEP_ALIVE
+
+
+def test_chat_gives_up_after_the_retry(monkeypatch):
+    monkeypatch.setattr(loop, "OLLAMA_RETRY_DELAY_S", 0)
+    monkeypatch.setattr(loop.requests, "post", lambda *a, **k: FakeResponse(500))
+    with pytest.raises(requests.HTTPError):
+        loop.chat([], [])
+
+
+def test_chat_retries_a_dropped_connection_once(monkeypatch):
+    calls = []
+
+    def post(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise requests.ConnectionError("reset")
+        return FakeResponse(200, {"role": "assistant", "content": "ok"})
+    monkeypatch.setattr(loop, "OLLAMA_RETRY_DELAY_S", 0)
+    monkeypatch.setattr(loop.requests, "post", post)
+    assert loop.chat([], [])["content"] == "ok" and len(calls) == 2
